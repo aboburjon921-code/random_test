@@ -1,4 +1,3 @@
-"""SQLite ma'lumotlar ombori. Testlar, savollar, o'quvchi sessiyalari va natijalar."""
 import sqlite3
 import json
 import os
