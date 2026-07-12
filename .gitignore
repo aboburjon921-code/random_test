@@ -1,5 +1,0 @@
-node_modules/
-.env
-data/tests.json
-*.log
-.DS_Store
