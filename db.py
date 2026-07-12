@@ -39,7 +39,7 @@ def init():
     CREATE TABLE IF NOT EXISTS questions(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         owner_id INTEGER, base_id INTEGER, topic TEXT,
-        stem TEXT, stem_media TEXT, options TEXT, correct_index INTEGER
+        stem TEXT, stem_media TEXT, stem_xml TEXT, options TEXT, correct_index INTEGER
     );
     CREATE TABLE IF NOT EXISTS tests(
         code TEXT PRIMARY KEY,
@@ -55,6 +55,10 @@ def init():
         started_at REAL, finished_at REAL
     );
     """)
+    # eski baza uchun migratsiya: stem_xml ustuni bo'lmasa qo'shamiz
+    cols = [r["name"] for r in c.execute("PRAGMA table_info(questions)").fetchall()]
+    if "stem_xml" not in cols:
+        c.execute("ALTER TABLE questions ADD COLUMN stem_xml TEXT DEFAULT '[]'")
     c.commit()
 
 
@@ -78,19 +82,30 @@ def add_base(owner_id, name):
     c.commit()
     return cur.lastrowid
 
+def _swap_media_tokens(xml_list, images):
+    """images (bytes) -> media jadvaliga; xml ichidagi LOCALMEDIA:k -> DBMEDIA:{id}."""
+    ids = [add_media(b) for b in images]
+    out = []
+    for s in xml_list:
+        for k, mid in enumerate(ids):
+            s = s.replace("LOCALMEDIA:%d" % k, "DBMEDIA:%d" % mid)
+        out.append(s)
+    return out, ids
+
 def add_questions(owner_id, base_id, topic, parsed_questions):
-    """parsed_questions: parser.parse_docx natijasi. Rasmlarni media'ga yozadi."""
     c = conn()
     count = 0
     for q in parsed_questions:
-        stem_media = [add_media(b) for b in q["stem_images"]]
+        stem_xml, stem_ids = _swap_media_tokens(q.get("stem_xml", []), q.get("stem_images", []))
         opts = []
         for o in q["options"]:
-            opts.append({"text": o["text"], "media": [add_media(b) for b in o["images"]]})
+            oxml, oids = _swap_media_tokens(o.get("xml", []), o.get("images", []))
+            opts.append({"text": o["text"], "media": oids, "xml": oxml})
         c.execute(
-            "INSERT INTO questions(owner_id,base_id,topic,stem,stem_media,options,correct_index)"
-            " VALUES(?,?,?,?,?,?,?)",
-            (owner_id, base_id, topic, q["stem"], json.dumps(stem_media),
+            "INSERT INTO questions(owner_id,base_id,topic,stem,stem_media,stem_xml,options,correct_index)"
+            " VALUES(?,?,?,?,?,?,?,?)",
+            (owner_id, base_id, topic, q["stem"], json.dumps(stem_ids),
+             json.dumps(stem_xml, ensure_ascii=False),
              json.dumps(opts, ensure_ascii=False), q["correct_index"]))
         count += 1
     c.commit()
@@ -113,6 +128,7 @@ def get_question(qid):
         return None
     d = dict(row)
     d["stem_media"] = json.loads(d["stem_media"])
+    d["stem_xml"] = json.loads(d["stem_xml"] or "[]")
     d["options"] = json.loads(d["options"])
     return d
 
