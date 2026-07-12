@@ -13,6 +13,12 @@ _conn = None
 def conn():
     global _conn
     if _conn is None:
+        # DB papkasi mavjud bo'lmasa — yaratamiz (masalan /data)
+        folder = os.path.dirname(os.path.abspath(DB_PATH))
+        try:
+            os.makedirs(folder, exist_ok=True)
+        except Exception:
+            pass
         _conn = sqlite3.connect(DB_PATH, check_same_thread=False)
         _conn.row_factory = sqlite3.Row
         _conn.execute("PRAGMA journal_mode=WAL")
