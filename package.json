@@ -1,0 +1,21 @@
+{
+  "name": "random-test-telegram-bot",
+  "version": "1.0.0",
+  "description": "Word test bazalaridan random test tuzuvchi Telegram bot + javoblarni tekshiruvchi WebApp",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "@xmldom/xmldom": "^0.8.10",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "jszip": "^3.10.1",
+    "telegraf": "^4.16.3"
+  },
+  "license": "MIT"
+}
