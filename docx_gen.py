@@ -1,9 +1,4 @@
-"""
-Testni Word (.docx) qilib chiqarish.
-Formulalar/asl bezak AYNAN nusxalanadi (matnga aylantirilmaydi).
-Faqat: savol qayta raqamlanadi, variantlar aralashtirilib A) B) C)... deb qayta belgilanadi.
-Oddiy matn Times New Roman bo'ladi; formulalar (Cambria Math) o'z holicha qoladi.
-"""
+
 import io
 import re
 import random
@@ -77,11 +72,7 @@ def _append_fragments(doc, p, xml_list, get_media):
 
 
 def build(questions, title, get_media=lambda mid: None, shuffle_options=True):
-    """
-    questions: [{stem, stem_xml:[...], options:[{text,xml:[...],correct?}], correct_index}]
-    get_media(mid)->bytes : rasm baytlarini olish uchun (DBMEDIA tokenlari)
-    return: (test_bytes, key_bytes)
-    """
+ 
     test = Document(); _set_default_font(test)
     key = Document(); _set_default_font(key)
 
