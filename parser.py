@@ -1,25 +1,21 @@
-"""
-Word (.docx) bazani o'qish moduli.
-core.js dagi sinovdan o'tgan mantiqning Python porti.
 
-Har bir savolni quyidagicha ajratadi:
-  - #N.  -> savol boshlanishi
-  - +X)  -> to'g'ri javob
-  - A) B) C) ...  -> variantlar (belgilar matnga yopishgan/bir bo'lakda bo'lsa ham)
-Formula (OMML), grek (Unicode / Symbol shrift), yuqori/pastki indeks -> matnga aylantiriladi.
-Rasm -> baytlari ajratib olinadi (bot rasmni photo qilib yuboradi).
-Jadval -> kataklari o'qiladi.
-"""
 import re
+import io
+import copy
 import zipfile
 from lxml import etree
 
 W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 M = "http://schemas.openxmlformats.org/officeDocument/2006/math"
 R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
-NS = {"w": W, "m": M, "r": R}
+A = "http://schemas.openxmlformats.org/drawingml/2006/main"
+V = "urn:schemas-microsoft-com:vml"
+XMLNS = "http://www.w3.org/XML/1998/namespace"
+NS = {"w": W, "m": M, "r": R, "a": A, "v": V}
 
-OBJ_OPEN, OBJ_CLOSE = "\ue000", "\ue001"
+SKIP = {"pPr", "bookmarkStart", "bookmarkEnd", "proofErr", "sectPr",
+        "commentRangeStart", "commentRangeEnd", "commentReference",
+        "lastRenderedPageBreak"}
 
 SYMBOL_MAP = {
     0x61: "α", 0x62: "β", 0x63: "χ", 0x64: "δ", 0x65: "ε", 0x66: "φ", 0x67: "γ",
@@ -34,192 +30,111 @@ SYMBOL_MAP = {
     0xA5: "∞", 0xD6: "√", 0xF7: "÷", 0xB4: "×", 0xB6: "∂", 0xF2: "∫",
     0xE5: "∑", 0xD5: "∏", 0xCE: "∈", 0xB7: "·", 0xB0: "°",
 }
-SUP = {"0": "⁰", "1": "¹", "2": "²", "3": "³", "4": "⁴", "5": "⁵", "6": "⁶",
-       "7": "⁷", "8": "⁸", "9": "⁹", "+": "⁺", "-": "⁻", "n": "ⁿ", "i": "ⁱ",
-       "(": "⁽", ")": "⁾", "a": "ᵃ", "b": "ᵇ", "x": "ˣ"}
-SUB = {"0": "₀", "1": "₁", "2": "₂", "3": "₃", "4": "₄", "5": "₅", "6": "₆",
-       "7": "₇", "8": "₈", "9": "₉", "+": "₊", "-": "₋", "(": "₍", ")": "₎",
-       "a": "ₐ", "e": "ₑ", "x": "ₓ", "n": "ₙ"}
+SUP = {c: s for c, s in zip("0123456789+-n i()axb",
+       "⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻ⁿ ⁱ⁽⁾ᵃˣᵇ")}
+SUB = {c: s for c, s in zip("0123456789+-()aexn",
+       "₀₁₂₃₄₅₆₇₈₉₊₋₍₎ₐₑₓₙ")}
 
-LABEL_G = re.compile(r"(^|\s)(\+?)\s*([A-Za-z])\s*\)")
+LABEL_RE = re.compile(r"^\s*(\+?)\s*([A-Za-z])\s*\)\s*(.*)$", re.S)
 LABEL_TEST = re.compile(r"(^|\s)(\+?)\s*[A-Za-z]\s*\)")
-HASH_RE = re.compile(r"^#\s*(\d+)\s*\.")
-
-SKIP = {"pPr", "bookmarkStart", "bookmarkEnd", "proofErr", "sectPr",
-        "commentRangeStart", "commentRangeEnd", "commentReference",
-        "lastRenderedPageBreak"}
+HASH_RE = re.compile(r"^\s*#\s*(\d+)\s*\.\s*(.*)$", re.S)
 
 
-def _tag(el):
-    if not isinstance(el.tag, str):
-        return ""
-    return etree.QName(el).localname
+def ln(el):
+    return etree.QName(el).localname if isinstance(el.tag, str) else ""
 
-
-def _to_super(s):
-    return "".join(SUP.get(ch, None) or ch for ch in s) if all(ch in SUP for ch in s) else "^" + s
+def _to_sup(s):
+    return "".join(SUP.get(ch, ch) for ch in s) if all(ch in SUP for ch in s) else "^" + s
 def _to_sub(s):
-    return "".join(SUB.get(ch, None) or ch for ch in s) if all(ch in SUB for ch in s) else "_" + s
+    return "".join(SUB.get(ch, ch) for ch in s) if all(ch in SUB for ch in s) else "_" + s
 
 
+# ---------- MATN chiqarish (interaktiv uchun) ----------
 def _omml_text(node):
-    t = _tag(node)
+    t = ln(node)
     if t == "t":
         return node.text or ""
     if t == "r":
         return "".join(_omml_text(c) for c in node)
     if t == "sSup":
         e = node.find("m:e", NS); sup = node.find("m:sup", NS)
-        base = _omml_children(e) if e is not None else ""
-        ex = _omml_children(sup) if sup is not None else ""
-        return base + _to_super(ex)
+        return _omml_kids(e) + _to_sup(_omml_kids(sup))
     if t == "sSub":
         e = node.find("m:e", NS); sub = node.find("m:sub", NS)
-        base = _omml_children(e) if e is not None else ""
-        ix = _omml_children(sub) if sub is not None else ""
-        return base + _to_sub(ix)
+        return _omml_kids(e) + _to_sub(_omml_kids(sub))
     if t == "sSubSup":
         e = node.find("m:e", NS); sub = node.find("m:sub", NS); sup = node.find("m:sup", NS)
-        return (_omml_children(e) + _to_sub(_omml_children(sub)) + _to_super(_omml_children(sup)))
+        return _omml_kids(e) + _to_sub(_omml_kids(sub)) + _to_sup(_omml_kids(sup))
     if t == "f":
-        num = node.find("m:num", NS); den = node.find("m:den", NS)
-        return "(" + _omml_children(num) + ")/(" + _omml_children(den) + ")"
+        return "(" + _omml_kids(node.find("m:num", NS)) + ")/(" + _omml_kids(node.find("m:den", NS)) + ")"
     if t == "rad":
-        e = node.find("m:e", NS)
-        return "√(" + (_omml_children(e) if e is not None else "") + ")"
+        return "√(" + _omml_kids(node.find("m:e", NS)) + ")"
     if t == "d":
-        es = node.findall("m:e", NS)
-        return "(" + ", ".join(_omml_children(e) for e in es) + ")"
+        return "(" + ", ".join(_omml_kids(e) for e in node.findall("m:e", NS)) + ")"
     if t == "nary":
-        sub = node.find("m:sub", NS); sup = node.find("m:sup", NS); e = node.find("m:e", NS)
         s = "∑"
-        if sub is not None: s += _to_sub(_omml_children(sub))
-        if sup is not None: s += _to_super(_omml_children(sup))
-        if e is not None: s += _omml_children(e)
-        return s
-    return _omml_children(node)
+        sub = node.find("m:sub", NS); sup = node.find("m:sup", NS); e = node.find("m:e", NS)
+        if sub is not None: s += _to_sub(_omml_kids(sub))
+        if sup is not None: s += _to_sup(_omml_kids(sup))
+        return s + _omml_kids(e)
+    return _omml_kids(node)
 
+def _omml_kids(node):
+    return "".join(_omml_text(c) for c in node) if node is not None else ""
 
-def _omml_children(node):
-    if node is None:
-        return ""
-    return "".join(_omml_text(c) for c in node)
-
-
-def _run_text(run, images, imgmap, rels, zf):
-    """Bitta run -> matn (yoki rasm placeholder)."""
-    # rasm bormi?
-    if run.find(".//w:drawing", NS) is not None or run.find(".//w:pict", NS) is not None:
-        rid = None
-        blip = run.find(".//a:blip", {"a": "http://schemas.openxmlformats.org/drawingml/2006/main"})
-        if blip is not None:
-            rid = blip.get("{%s}embed" % R) or blip.get("{%s}link" % R)
-        if rid is None:
-            imgd = run.find(".//v:imagedata", {"v": "urn:schemas-microsoft-com:vml"})
-            if imgd is not None:
-                rid = imgd.get("{%s}id" % R)
-        if rid and rid in rels:
-            data = _read_media(zf, rels[rid])
-            if data:
-                idx = len(images)
-                images.append(data)
-                return OBJ_OPEN + str(idx) + OBJ_CLOSE
-        return ""
-    out = []
-    # vertAlign (superscript/subscript via format button)
+def _run_text(run):
     va = None
     rpr = run.find("w:rPr", NS)
     if rpr is not None:
         v = rpr.find("w:vertAlign", NS)
         if v is not None:
             va = v.get("{%s}val" % W)
+    out = []
+    has_img = run.find(".//w:drawing", NS) is not None or run.find(".//w:pict", NS) is not None
     for c in run:
-        ct = _tag(c)
-        if ct == "t":
+        t = ln(c)
+        if t == "t":
             out.append(c.text or "")
-        elif ct in ("tab", "br", "cr"):
+        elif t in ("tab", "br", "cr"):
             out.append(" ")
-        elif ct == "sym":
+        elif t == "sym":
             font = c.get("{%s}font" % W) or ""
             char = c.get("{%s}char" % W) or ""
             if re.search("symbol", font, re.I) and char:
                 out.append(SYMBOL_MAP.get(int(char, 16) & 0xFF, ""))
     text = "".join(out)
-    if va == "superscript":
-        text = _to_super(text)
-    elif va == "subscript":
-        text = _to_sub(text)
+    if va == "superscript": text = _to_sup(text)
+    elif va == "subscript": text = _to_sub(text)
+    if has_img and not text:
+        return "🖼"
     return text
 
+def _node_text(node):
+    t = ln(node)
+    if t == "r":
+        return _run_text(node)
+    if t in ("oMath", "oMathPara"):
+        return _omml_kids(node) if t == "oMathPara" else _omml_text(node)
+    if t in ("hyperlink", "smartTag", "ins"):
+        return "".join(_run_text(r) for r in node if ln(r) == "r")
+    return ""
 
-def _encode_para(p, images, imgmap, rels, zf):
-    parts = []
-    for c in p:
-        t = _tag(c)
-        if t in SKIP:
-            continue
-        if t == "r":
-            parts.append(_run_text(c, images, imgmap, rels, zf))
-        elif t in ("oMath", "oMathPara"):
-            parts.append(_omml_children(c) if t == "oMathPara" else _omml_text(c))
-        elif t in ("hyperlink", "smartTag", "ins"):
-            for rr in c:
-                if _tag(rr) == "r":
-                    parts.append(_run_text(rr, images, imgmap, rels, zf))
-    return "".join(parts)
+def _nodes_text(nodes):
+    return "".join(_node_text(n) for n in nodes).strip()
 
 
-def _encode_nodes(nodes, images, rels, zf):
-    """Blok tugunlar (w:p / w:tbl) -> yagona matn (rasm placeholderlari bilan)."""
-    imgmap = {}
-    chunks = []
-    for n in nodes:
-        t = _tag(n)
-        if t == "p":
-            chunks.append(_encode_para(n, images, imgmap, rels, zf))
-        elif t == "tbl":
-            cells = []
-            for row in n:
-                if _tag(row) != "tr":
-                    continue
-                for cell in row:
-                    if _tag(cell) != "tc":
-                        continue
-                    for cp in cell:
-                        if _tag(cp) == "p":
-                            cells.append(_encode_para(cp, images, imgmap, rels, zf))
-            chunks.append(" ".join(cells))
-        chunks.append(" ")
-    return "".join(chunks)
+# ---------- XML chiqarish (Word uchun, AYNAN nusxa) ----------
+def _make_text_run(text):
+    r = etree.Element("{%s}r" % W)
+    t = etree.SubElement(r, "{%s}t" % W)
+    t.set("{%s}space" % XMLNS, "preserve")
+    t.text = text
+    return r
 
-
-def _segment_clean(seg, images):
-    """placeholderlarni ajratib, matn + shu segmentga tegishli rasm indekslarini qaytaradi."""
-    imgs = []
-    def repl(m):
-        imgs.append(int(m.group(1)))
-        return ""
-    text = re.sub(OBJ_OPEN + r"(\d+)" + OBJ_CLOSE, repl, seg)
-    return text.strip(), imgs
-
-
-def _split_options(combined, images):
-    marks = []
-    for m in LABEL_G.finditer(combined):
-        label_start = m.start() + len(m.group(1))
-        marks.append((label_start, m.end(), m.group(2) == "+"))
-    options = []
-    for i, (ls, ce, correct) in enumerate(marks):
-        frm = ce
-        to = marks[i + 1][0] if i + 1 < len(marks) else len(combined)
-        text, imgs = _segment_clean(combined[frm:to], images)
-        if text or imgs:
-            options.append({"text": text, "correct": correct, "images": imgs})
-    return options
-
-
-def _read_media(zf, target):
-    target = target.lstrip("./")
+def _media_from_rid(rid, rels, zf):
+    if not rid or rid not in rels:
+        return None
+    target = rels[rid].lstrip("./")
     for path in ("word/" + target, target):
         try:
             return zf.read(path)
@@ -227,102 +142,167 @@ def _read_media(zf, target):
             continue
     return None
 
+def _serialize(nodes, rels, zf):
+    """nodes -> (xml_strings, images_bytes). Rasm r:embed -> LOCALMEDIA:k tokeni."""
+    xml_list, images = [], []
+    for node in nodes:
+        c = copy.deepcopy(node)
+        for blip in c.findall(".//{%s}blip" % A):
+            rid = blip.get("{%s}embed" % R) or blip.get("{%s}link" % R)
+            data = _media_from_rid(rid, rels, zf)
+            if data is not None:
+                blip.set("{%s}embed" % R, "LOCALMEDIA:%d" % len(images)); images.append(data)
+        for img in c.findall(".//{%s}imagedata" % V):
+            rid = img.get("{%s}id" % R)
+            data = _media_from_rid(rid, rels, zf)
+            if data is not None:
+                img.set("{%s}id" % R, "LOCALMEDIA:%d" % len(images)); images.append(data)
+        xml_list.append(etree.tostring(c, encoding="unicode"))
+    return xml_list, images
+
+
+# ---------- content node oqimi ----------
+def _content_nodes(nodes):
+    out = []
+    for n in nodes:
+        t = ln(n)
+        if t == "p":
+            for c in n:
+                if ln(c) not in SKIP:
+                    out.append(c)
+        elif t == "tbl":
+            for row in n:
+                if ln(row) == "tr":
+                    for cell in row:
+                        if ln(cell) == "tc":
+                            for cp in cell:
+                                if ln(cp) == "p":
+                                    for c in cp:
+                                        if ln(c) not in SKIP:
+                                            out.append(c)
+    return out
+
+
+def _split_options(stream):
+  
+    options = []
+    cur = None
+    pending_plus = False
+    for node in stream:
+        if ln(node) == "r":
+            txt = _run_text(node)
+            stripped = txt.strip()
+            m = LABEL_RE.match(stripped)
+            if m and len(m.group(2)) == 1:
+                correct = (m.group(1) == "+") or pending_plus
+                pending_plus = False
+                cur = {"correct": correct, "nodes": []}
+                options.append(cur)
+                rem = m.group(3)
+                if rem.strip():
+                    cur["nodes"].append(_make_text_run(rem))
+                continue
+            if stripped == "+":
+                pending_plus = True
+                continue
+            if cur is not None:
+                cur["nodes"].append(node)
+        else:
+            if cur is not None:
+                cur["nodes"].append(node)
+    return options
+
+
+def _extract_stem(stem_p):
+    content, consumed, started = [], "", False
+    for c in stem_p:
+        t = ln(c)
+        if t in SKIP:
+            continue
+        if not started:
+            if t == "r":
+                consumed += _run_text(c)
+                m = HASH_RE.match(consumed)
+                if m and re.search(r"#\s*\d+\s*\.", consumed):
+                    started = True
+                    rem = m.group(2)
+                    if rem.strip():
+                        content.append(_make_text_run(rem))
+                continue
+            else:
+                started = True
+                content.append(c)
+        else:
+            content.append(c)
+    return content
+
 
 def _load_rels(zf):
     rels = {}
     try:
-        data = zf.read("word/_rels/document.xml.rels")
+        root = etree.fromstring(zf.read("word/_rels/document.xml.rels"))
     except KeyError:
         return rels
-    root = etree.fromstring(data)
     for rel in root:
-        rid = rel.get("Id")
-        target = rel.get("Target")
+        rid, target = rel.get("Id"), rel.get("Target")
         if rid and target:
             rels[rid] = target
     return rels
 
 
 def parse_docx(data, topic=""):
-    """
-    data: bytes (docx fayl)
-    return: [ {topic, stem, stem_images:[bytes], options:[{text,correct,images:[bytes]}], correct_index} , ... ]
-    """
-    zf = zipfile.ZipFile(__import__("io").BytesIO(data))
+    zf = zipfile.ZipFile(io.BytesIO(data))
     rels = _load_rels(zf)
-    xml = zf.read("word/document.xml")
-    root = etree.fromstring(xml)
-    body = root.find("w:body", NS)
+    root = etree.fromstring(zf.read("word/document.xml"))
+    body = root.find("{%s}body" % W)
     if body is None:
         return []
 
-    # bloklarga bo'lish
-    blocks = []
-    cur = None
+    blocks, cur = [], None
     for node in body:
-        t = _tag(node)
+        t = ln(node)
         if t not in ("p", "tbl"):
             continue
         text = "".join(node.itertext()).strip()
-        if t == "p" and HASH_RE.match(text):
-            if cur:
-                blocks.append(cur)
+        if t == "p" and re.match(r"^\s*#\s*\d+\s*\.", text):
+            if cur: blocks.append(cur)
             cur = {"stem_p": node, "following": []}
         elif cur:
             cur["following"].append(node)
-    if cur:
-        blocks.append(cur)
+    if cur: blocks.append(cur)
 
     questions = []
     for b in blocks:
-        images = []  # bu savolga tegishli barcha rasm baytlari
-        stem_combined = _encode_nodes([b["stem_p"]], images, rels, zf)
-        stem_combined = re.sub(r"^\s*#\s*\d+\s*\.\s*", "", stem_combined)
+        stem_nodes = _extract_stem(b["stem_p"])
 
-        # savol qatorida variant bormi?
-        inline = ""
-        mm = LABEL_TEST.search(stem_combined)
-        if mm:
-            inline = stem_combined[mm.start():]
-            stem_combined = stem_combined[:mm.start()]
-
-        # following: stem-extra vs option nodes
-        opt_nodes = []
-        started = bool(inline)
+        # stem qatorida variant bo'lsa (kamdan-kam) — ajratmaymiz, following'dan olamiz
+        opt_source = []
         for node in b["following"]:
-            has_label = bool(LABEL_TEST.search("".join(node.itertext())))
-            if not started and not has_label:
-                # stem davomi (rasm/jadval/matn) -> stem matniga qo'shamiz
-                extra = _encode_nodes([node], images, rels, zf)
-                stem_combined += " " + extra
+            if LABEL_TEST.search("".join(node.itertext())) or opt_source:
+                opt_source.append(node)
             else:
-                started = True
-                opt_nodes.append(node)
+                stem_nodes.append(node)  # stem davomi (rasm/jadval/matn)
 
-        opt_combined = inline
-        if opt_nodes:
-            opt_combined += " " + _encode_nodes(opt_nodes, images, rels, zf)
-
-        options = _split_options(opt_combined, images)
-        stem_text, stem_imgs = _segment_clean(stem_combined, images)
-
+        options = _split_options(_content_nodes(opt_source))
         if len(options) < 2:
             continue
-        if not stem_text and not stem_imgs:
+
+        stem_xml, stem_imgs = _serialize(stem_nodes, rels, zf)
+        stem_text = _nodes_text(stem_nodes)
+
+        opt_out = []
+        for o in options:
+            oxml, oimgs = _serialize(o["nodes"], rels, zf)
+            opt_out.append({"text": _nodes_text(o["nodes"]), "correct": o["correct"],
+                            "xml": oxml, "images": oimgs})
+
+        correct_index = next((i for i, o in enumerate(opt_out) if o["correct"]), -1)
+        if not stem_text and not stem_imgs and not any(o["text"] for o in opt_out):
             continue
 
-        correct_index = next((i for i, o in enumerate(options) if o["correct"]), -1)
-
-        # placeholder indekslarni haqiqiy baytlarga aylantirish
-        q = {
+        questions.append({
             "topic": topic,
-            "stem": stem_text,
-            "stem_images": [images[i] for i in stem_imgs if i < len(images)],
-            "options": [{"text": o["text"],
-                         "correct": o["correct"],
-                         "images": [images[i] for i in o["images"] if i < len(images)]}
-                        for o in options],
-            "correct_index": correct_index,
-        }
-        questions.append(q)
+            "stem": stem_text, "stem_xml": stem_xml, "stem_images": stem_imgs,
+            "options": opt_out, "correct_index": correct_index,
+        })
     return questions
