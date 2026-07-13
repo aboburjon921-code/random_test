@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+*.db
+*.db-wal
+*.db-shm
+.env
+node_modules/
+*.docx
+*.pdf
+*.png
+*.jpg
+mml_samples.json
+rendered.html
+*.mjs
