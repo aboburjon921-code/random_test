@@ -331,13 +331,61 @@ th{{background:#334155;font-size:12px;text-transform:uppercase;color:#cbd5e1}}
 .badge{{padding:2px 8px;border-radius:20px;font-size:11px;font-weight:700}}
 .b-fin{{background:#166534;color:#bbf7d0}} .b-act{{background:#854d0e;color:#fde68a}}
 .upd{{color:#64748b;font-size:11px;margin-top:10px}}
+.racebtn{{display:block;width:100%;background:linear-gradient(90deg,#7c3aed,#2563eb);color:#fff;border:none;
+  padding:14px;border-radius:12px;font-size:16px;font-weight:800;cursor:pointer;margin-bottom:16px;
+  box-shadow:0 4px 14px rgba(124,58,237,.4)}}
+/* Poyga ekrani */
+#race{{display:none;position:fixed;inset:0;z-index:300;background:linear-gradient(160deg,#0b1220,#131c34);
+  color:#fff;flex-direction:column;padding:14px 16px;overflow:hidden}}
+#race .rhead{{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}}
+#race .rhead .t{{font-size:20px;font-weight:800}}
+#race .rhead .fin{{font-size:15px;color:#a5b4fc;font-weight:700}}
+#race .rclose{{background:#334155;color:#fff;border:none;border-radius:8px;padding:8px 14px;font-weight:700;cursor:pointer}}
+#race .leader{{text-align:center;font-size:15px;color:#fde047;margin-bottom:8px;font-weight:700;min-height:20px}}
+#lanes{{flex:1;overflow-y:auto;position:relative;padding-right:6px}}
+.lane{{position:relative;height:46px;margin:6px 0;border-bottom:2px dashed rgba(255,255,255,.08)}}
+.finish{{position:absolute;right:0;top:0;bottom:0;width:4px;background:repeating-linear-gradient(0deg,#fff 0 6px,#000 6px 12px)}}
+.car{{position:absolute;top:3px;left:0;display:flex;align-items:center;gap:6px;transition:left 1s cubic-bezier(.3,1.2,.5,1);white-space:nowrap}}
+.car .av{{width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;
+  font-weight:800;font-size:15px;color:#fff;box-shadow:0 2px 6px rgba(0,0,0,.4);flex:0 0 auto}}
+.car .em{{font-size:22px}} .car .nm{{font-size:13px;font-weight:700;color:#e2e8f0}}
+.car .pt{{font-size:12px;color:#fbbf24;font-weight:800}}
+/* Podium */
+#podium{{display:none;position:fixed;inset:0;z-index:310;background:rgba(8,12,24,.94);color:#fff;
+  flex-direction:column;align-items:center;justify-content:center;text-align:center}}
+#podium h1{{font-size:30px;margin:0 0 24px}}
+.pods{{display:flex;align-items:flex-end;gap:14px}}
+.pod{{width:92px;border-radius:12px 12px 0 0;display:flex;flex-direction:column;justify-content:flex-end;
+  align-items:center;padding:10px 6px;color:#0b1220;font-weight:800}}
+.pod .medal{{font-size:30px}} .pod .pn{{font-size:14px;margin-top:4px}} .pod .ps{{font-size:13px}}
+.pod.g1{{height:180px;background:linear-gradient(#fde047,#eab308)}}
+.pod.g2{{height:140px;background:linear-gradient(#e5e7eb,#9ca3af)}}
+.pod.g3{{height:110px;background:linear-gradient(#fdba74,#c2703a)}}
+#podium .pclose{{margin-top:26px;background:#334155;color:#fff;border:none;border-radius:10px;padding:12px 22px;font-weight:700;cursor:pointer}}
 </style></head><body>
 <h2>📊 {code} — jonli natijalar</h2>
 <div class="sub" id="sub">yuklanmoqda…</div>
 {qr_block}
 <div class="stats" id="stats"></div>
+<button class="racebtn" onclick="openRace()">🏁 Poyga rejimi (proyektor uchun)</button>
 <div id="tbl"></div>
 <div class="upd" id="upd"></div>
+
+<div id="race">
+  <div class="rhead">
+    <div class="t">🏁 Poyga</div>
+    <div class="fin" id="rfin">0/0 yakunladi</div>
+    <button class="rclose" onclick="closeRace()">✕ Yopish</button>
+  </div>
+  <div class="leader" id="rleader"></div>
+  <div id="lanes"></div>
+</div>
+<div id="podium">
+  <h1>🎉 G'oliblar!</h1>
+  <div class="pods" id="pods"></div>
+  <button class="pclose" onclick="document.getElementById('podium').style.display='none'">Yopish</button>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.3/dist/confetti.browser.min.js"></script>
 <script>
 const CODE="{code}",PT="{ptoken}";
 function esc(s){{return (s||'').replace(/</g,'&lt;')}}
@@ -362,8 +410,90 @@ async function load(){{
     document.getElementById('tbl').innerHTML=
       '<table><tr><th>O\\'quvchi</th><th>Holat</th><th>Ball</th><th>Vaqt</th></tr>'+rows+'</table>';
     document.getElementById('upd').textContent='yangilandi: '+new Date().toLocaleTimeString();
+    window.__last=d; if(window.raceOn) renderRace(d);
   }}catch(e){{}}
 }}
 function stat(v,l){{return '<div class="stat"><div class="v">'+v+'</div><div class="l">'+l+'</div></div>';}}
-load(); setInterval(load,5000);
+
+// ===== Poyga =====
+window.raceOn=false;
+const EMOJIS=['🚗','🏎️','🚙','🚕','🚌','🚓','🏍️','🚐','🛺','🚜'];
+function colorFor(name){{ let h=0; for(let i=0;i<name.length;i++)h=(h*31+name.charCodeAt(i))%360; return 'hsl('+h+',70%,55%)'; }}
+function emojiFor(name){{ let h=0; for(let i=0;i<name.length;i++)h=(h+name.charCodeAt(i))%EMOJIS.length; return EMOJIS[h]; }}
+function initial(name){{ const c=(name||'?').trim()[0]||'?'; return c.toUpperCase(); }}
+
+let laneOrder=[];  // barqaror tartib (mashinalar sakramasin)
+function openRace(){{
+  window.raceOn=true;
+  laneOrder=[];
+  document.getElementById('race').style.display='flex';
+  if(window.__last) renderRace(window.__last);
+  load();
+}}
+function closeRace(){{ window.raceOn=false; document.getElementById('race').style.display='none'; }}
+
+function renderRace(d){{
+  const qt=d.q_total||1;
+  const studs=d.students||[];
+  // barqaror tartib: yangi o'quvchilarni oxiriga qo'shamiz
+  studs.forEach(s=>{{ if(!laneOrder.includes(s.name)) laneOrder.push(s.name); }});
+  const byName={{}}; studs.forEach(s=>byName[s.name]=s);
+
+  document.getElementById('rfin').textContent=d.finished+'/'+d.total_students+' yakunladi';
+  // yetakchi
+  let lead=null; studs.forEach(s=>{{ if(!lead||s.correct>lead.correct)lead=s; }});
+  document.getElementById('rleader').textContent=lead&&lead.correct>0 ? ('🥇 Eng oldinda: '+lead.name+' — '+lead.correct+' ta') : '';
+
+  const lanes=document.getElementById('lanes');
+  // laneларни bir marta yaratamiz, keyin faqat pozitsiyани yangilaymiz
+  laneOrder.forEach(name=>{{
+    const s=byName[name]; if(!s)return;
+    let lane=document.getElementById('lane_'+cssId(name));
+    if(!lane){{
+      lane=document.createElement('div'); lane.className='lane'; lane.id='lane_'+cssId(name);
+      lane.innerHTML='<div class="finish"></div><div class="car" id="car_'+cssId(name)+'">'+
+        '<div class="av" style="background:'+colorFor(name)+'">'+initial(name)+'</div>'+
+        '<span class="em">'+emojiFor(name)+'</span>'+
+        '<span class="nm">'+esc(name)+'</span> <span class="pt" id="pt_'+cssId(name)+'"></span></div>';
+      lanes.appendChild(lane);
+    }}
+    const frac=Math.min(1, (s.correct||0)/qt);
+    const car=document.getElementById('car_'+cssId(name));
+    car.style.left='calc('+(frac*100)+'% - '+(frac*150)+'px)';
+    document.getElementById('pt_'+cssId(name)).textContent=(s.correct||0)+'/'+qt+(s.status==='finished'?' ✅':'');
+  }});
+
+  // hamma yakunladimi -> podium + konfetti
+  if(d.total_students>0 && d.finished===d.total_students && !window.podiumShown){{
+    window.podiumShown=true;
+    setTimeout(()=>showPodium(studs),900);
+  }}
+}}
+function cssId(name){{ return name.replace(/[^a-zA-Z0-9]/g,'_'); }}
+
+function showPodium(studs){{
+  const top=[...studs].sort((a,b)=> b.score-a.score || ((a.spent||1e9)-(b.spent||1e9))).slice(0,3);
+  const medals=['🥇','🥈','🥉']; const cls=['g1','g2','g3']; const orderIdx=[1,0,2];
+  const pods=document.getElementById('pods'); pods.innerHTML='';
+  orderIdx.forEach(i=>{{
+    if(!top[i])return;
+    const s=top[i];
+    pods.innerHTML+='<div class="pod '+cls[i]+'"><div class="medal">'+medals[i]+'</div>'+
+      '<div class="pn">'+esc(s.name)+'</div><div class="ps">'+s.score+'/'+s.total+'</div></div>';
+  }});
+  document.getElementById('podium').style.display='flex';
+  fireConfetti();
+}}
+function fireConfetti(){{
+  try{{
+    const end=Date.now()+2500;
+    (function frame(){{
+      confetti({{particleCount:5,angle:60,spread:70,origin:{{x:0}}}});
+      confetti({{particleCount:5,angle:120,spread:70,origin:{{x:1}}}});
+      if(Date.now()<end)requestAnimationFrame(frame);
+    }})();
+  }}catch(e){{}}
+}}
+
+load(); setInterval(load,3000);
 </script></body></html>"""
