@@ -313,4 +313,5 @@ def panel_data(code):
             hardest = {"q": hi[0] + 1, "miss_pct": round(100 * hi[1][0] / hi[1][1])}
     return {"title": test["title"], "code": code, "time_limit": test["time_limit"],
             "students": students, "avg": avg, "finished": finished_n,
-            "total_students": len(students), "hardest": hardest}
+            "total_students": len(students), "hardest": hardest,
+            "closed": bool(test.get("closed"))}
