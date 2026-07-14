@@ -131,6 +131,33 @@ def create_test(owner_id, title, count, shuffle_per_student=True, time_limit=30,
                int(time_limit), ptok, time.time()))
     c.commit(); return code, len(chosen)
 
+def _new_test_row(owner_id, title, chosen, shuffle_per_student, time_limit):
+    code = _code(); ptok = _tok()
+    conn().execute("INSERT INTO tests(code,owner_id,title,question_ids,shuffle_per_student,time_limit,panel_token,created_at)"
+                   " VALUES(?,?,?,?,?,?,?,?)",
+                   (code, owner_id, title, json.dumps(chosen), int(shuffle_per_student),
+                    int(time_limit), ptok, time.time()))
+    conn().commit()
+    return code
+
+def create_test_topics(owner_id, title, spec, shuffle_per_student=True, time_limit=30):
+    """spec: [(base_id, count), ...] — har mavzudan tasodifiy 'count' ta savol."""
+    c = conn()
+    chosen = []
+    for base_id, count in spec:
+        if count <= 0:
+            continue
+        rows = c.execute("SELECT id FROM questions WHERE owner_id=? AND base_id=?",
+                         (owner_id, base_id)).fetchall()
+        ids = [r["id"] for r in rows]
+        random.shuffle(ids)
+        chosen.extend(ids[:count])
+    if not chosen:
+        return None, 0
+    random.shuffle(chosen)  # mavzular aralashsin
+    code = _new_test_row(owner_id, title, chosen, shuffle_per_student, time_limit)
+    return code, len(chosen)
+
 def get_test(code):
     row = conn().execute("SELECT * FROM tests WHERE code=?", (code,)).fetchone()
     if not row: return None
