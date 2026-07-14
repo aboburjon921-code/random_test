@@ -1,3 +1,4 @@
+
 import time, html, json
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -259,10 +260,13 @@ def _result_page(token):
 # ============ O'QITUVCHI PANELI ============
 @app.get("/p/{code}/{ptoken}", response_class=HTMLResponse)
 def panel_page(code: str, ptoken: str):
+    import os as _os
     t = db.get_test(code)
     if not t or t["panel_token"] != ptoken:
         return HTMLResponse("<h3>Panel topilmadi.</h3>", status_code=404)
-    return HTMLResponse(_panel_html(code, ptoken))
+    username = _os.environ.get("BOT_USERNAME", "")
+    student_link = f"https://t.me/{username}?start={code}" if username else ""
+    return HTMLResponse(_panel_html(code, ptoken, student_link))
 
 @app.get("/api/panel/{code}/{ptoken}")
 def api_panel(code: str, ptoken: str):
@@ -273,13 +277,51 @@ def api_panel(code: str, ptoken: str):
     return JSONResponse(db.panel_data(code))
 
 
-def _panel_html(code, ptoken):
+def _panel_html(code, ptoken, student_link=""):
+    qr_block = ""
+    if student_link:
+        qr_block = f"""
+<div class="qrbox">
+  <div id="qr"></div>
+  <div class="qrinfo">
+    <div class="qrcode">🔑 Kod: <b>{code}</b></div>
+    <div class="qrhint">O'quvchilar QR-kodni telefon kamerasi bilan skanerlasin<br>yoki havoladan kirsin:</div>
+    <a class="qrlink" href="{student_link}" target="_blank">{student_link}</a>
+    <button class="qrbtn" onclick="toggleBig()">🔍 Kattalashtirish (proyektor uchun)</button>
+  </div>
+</div>
+<div id="qrbig" onclick="toggleBig()"><div id="qrbigInner"><div id="qrbigCode"></div></div></div>
+<script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
+<script>
+const LINK="{student_link}";
+function makeQR(el,size){{ el.innerHTML=""; new QRCode(el,{{text:LINK,width:size,height:size,correctLevel:QRCode.CorrectLevel.M}}); }}
+window.addEventListener('load',()=>{{ try{{makeQR(document.getElementById('qr'),150);}}catch(e){{}} }});
+function toggleBig(){{
+  const b=document.getElementById('qrbig');
+  if(b.style.display==='flex'){{b.style.display='none';return;}}
+  const inner=document.getElementById('qrbigCode');
+  makeQR(inner,Math.min(window.innerWidth,window.innerHeight)*0.75);
+  b.style.display='flex';
+}}
+</script>"""
     return f"""<!DOCTYPE html><html lang="uz"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Panel {code}</title>
 <style>
 body{{font-family:-apple-system,Segoe UI,Roboto,sans-serif;background:#0f172a;color:#e2e8f0;margin:0;padding:16px}}
 h2{{margin:0 0 4px}} .sub{{color:#94a3b8;font-size:13px;margin-bottom:16px}}
+.qrbox{{display:flex;gap:16px;align-items:center;background:#1e293b;border-radius:14px;padding:16px;margin-bottom:16px;flex-wrap:wrap}}
+#qr{{background:#fff;padding:8px;border-radius:8px;flex:0 0 auto}}
+#qr img{{display:block}}
+.qrinfo{{flex:1;min-width:200px}}
+.qrcode{{font-size:20px;margin-bottom:6px}} .qrcode b{{color:#38bdf8;letter-spacing:1px}}
+.qrhint{{font-size:12px;color:#94a3b8;margin-bottom:6px}}
+.qrlink{{color:#38bdf8;font-size:13px;word-break:break-all;text-decoration:none}}
+.qrbtn{{display:block;margin-top:10px;background:#2563eb;color:#fff;border:none;padding:9px 14px;
+  border-radius:8px;font-weight:700;font-size:13px;cursor:pointer}}
+#qrbig{{display:none;position:fixed;inset:0;background:rgba(255,255,255,.98);z-index:200;
+  align-items:center;justify-content:center;cursor:pointer;flex-direction:column}}
+#qrbigInner{{text-align:center}} #qrbigCode{{background:#fff}}
 .stats{{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px}}
 .stat{{background:#1e293b;border-radius:12px;padding:12px 16px;flex:1;min-width:120px}}
 .stat .v{{font-size:22px;font-weight:800;color:#38bdf8}} .stat .l{{font-size:12px;color:#94a3b8}}
@@ -292,6 +334,7 @@ th{{background:#334155;font-size:12px;text-transform:uppercase;color:#cbd5e1}}
 </style></head><body>
 <h2>📊 {code} — jonli natijalar</h2>
 <div class="sub" id="sub">yuklanmoqda…</div>
+{qr_block}
 <div class="stats" id="stats"></div>
 <div id="tbl"></div>
 <div class="upd" id="upd"></div>
@@ -301,7 +344,7 @@ function esc(s){{return (s||'').replace(/</g,'&lt;')}}
 async function load(){{
   try{{
     const r=await fetch('/api/panel/'+CODE+'/'+PT); const d=await r.json();
-    document.getElementById('sub').textContent=d.title+' · vaqt: '+d.time_limit+' daqiqa';
+    document.getElementById('sub').textContent=d.title+' · vaqt: '+d.time_limit+' daqiqa'+(d.closed?' · 🔒 yopiq':'');
     const hardest=d.hardest?('#'+d.hardest.q+' ('+d.hardest.miss_pct+'% xato)'):'—';
     document.getElementById('stats').innerHTML=
       stat(d.finished+'/'+d.total_students,'Yakunladi')+
