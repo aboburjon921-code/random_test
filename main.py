@@ -29,6 +29,12 @@ async def main():
 
     await application.initialize()
     await application.start()
+    try:
+        me = await application.bot.get_me()
+        os.environ["BOT_USERNAME"] = me.username or ""
+        log.info("Bot: @%s", me.username)
+    except Exception:
+        pass
     await application.updater.start_polling(allowed_updates=Update.ALL_TYPES,
                                             drop_pending_updates=True)
     asyncio.create_task(expirer())
