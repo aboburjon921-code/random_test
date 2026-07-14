@@ -1,4 +1,4 @@
-
+"""SQLite ombori: bazalar, savollar, testlar, web-sessiyalar, jonli natijalar."""
 import sqlite3, json, os, random, string, time, threading
 
 DB_PATH = os.environ.get("DB_PATH", "data.db")
@@ -34,7 +34,7 @@ def init():
         shuffle_per_student INTEGER, time_limit INTEGER, panel_token TEXT,
         closed INTEGER DEFAULT 0, created_at REAL);
     CREATE TABLE IF NOT EXISTS sessions(id INTEGER PRIMARY KEY AUTOINCREMENT,
-        code TEXT, token TEXT, student_id INTEGER, student_name TEXT,
+        code TEXT, token TEXT, student_id INTEGER, student_name TEXT, avatar TEXT,
         order_json TEXT, live TEXT, score INTEGER, total INTEGER,
         status TEXT, started_at REAL, deadline REAL, finished_at REAL);
     """)
@@ -43,6 +43,8 @@ def init():
             c.execute(ddl)
     if "closed" not in _cols("tests"):
         c.execute("ALTER TABLE tests ADD COLUMN closed INTEGER DEFAULT 0")
+    if "avatar" not in _cols("sessions"):
+        c.execute("ALTER TABLE sessions ADD COLUMN avatar TEXT DEFAULT ''")
     c.commit()
 
 # ---------- media ----------
@@ -206,9 +208,15 @@ def existing_session(code, student_id):
                          (code, student_id)).fetchone()
     return dict(row) if row else None
 
-def create_web_session(code, student_id, name):
+AVATARS = ["🦊","🐼","🐸","🦁","🐯","🐨","🐵","🐷","🐰","🐻","🐺","🦄","🐙","🐳",
+           "🦉","🦈","🐝","🦋","🐢","🦖","🐬","🦩","🦚","🐧","🐳","🦔","🐌","🦦",
+           "🦥","🦭","🐲","🦕","🐡","🦑","🦞","🐴","🐮","🐔","🦇","🦅"]
+
+def create_web_session(code, student_id, name, avatar=None):
     test = get_test(code)
     if not test: return None
+    if not avatar:
+        avatar = random.choice(AVATARS)
     qids = test["question_ids"][:]
     random.shuffle(qids)  # savol tartibi har o'quvchida boshqacha
     order = []
@@ -224,9 +232,9 @@ def create_web_session(code, student_id, name):
     now = time.time()
     deadline = now + int(test["time_limit"]) * 60
     c = conn()
-    c.execute("INSERT INTO sessions(code,token,student_id,student_name,order_json,live,score,total,"
-              "status,started_at,deadline,finished_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-              (code, token, student_id, name, json.dumps(order), json.dumps({}),
+    c.execute("INSERT INTO sessions(code,token,student_id,student_name,avatar,order_json,live,score,total,"
+              "status,started_at,deadline,finished_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+              (code, token, student_id, name, avatar, json.dumps(order), json.dumps({}),
                0, len(order), "active", now, deadline, 0))
     c.commit()
     return token
@@ -283,7 +291,7 @@ def expire_due():
 def panel_data(code):
     test = get_test(code)
     if not test: return None
-    rows = conn().execute("SELECT student_name,score,total,status,started_at,finished_at,live,order_json "
+    rows = conn().execute("SELECT student_name,avatar,score,total,status,started_at,finished_at,live,order_json "
                           "FROM sessions WHERE code=? ORDER BY status,score DESC", (code,)).fetchall()
     students = []
     q_miss = {}   # qindex -> [wrong, total_answered]
@@ -301,7 +309,8 @@ def panel_data(code):
         spent = None
         if d["status"] == "finished" and d["finished_at"]:
             spent = int(d["finished_at"] - d["started_at"])
-        students.append({"name": d["student_name"], "score": d["score"], "total": d["total"],
+        students.append({"name": d["student_name"], "avatar": d["avatar"] or "🐵",
+                         "score": d["score"], "total": d["total"],
                          "status": d["status"], "answered": answered, "spent": spent,
                          "correct": correct_live})
         if d["status"] == "finished":
