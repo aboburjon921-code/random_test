@@ -1,4 +1,3 @@
-"""SQLite ombori: bazalar, savollar, testlar, web-sessiyalar, jonli natijalar."""
 import sqlite3, json, os, random, string, time, threading
 
 DB_PATH = os.environ.get("DB_PATH", "data.db")
