@@ -1,3 +1,4 @@
+
 import sqlite3, json, os, random, string, time, threading
 
 DB_PATH = os.environ.get("DB_PATH", "data.db")
@@ -30,7 +31,8 @@ def init():
         stem TEXT, stem_media TEXT, stem_xml TEXT, options TEXT, correct_index INTEGER);
     CREATE TABLE IF NOT EXISTS tests(code TEXT PRIMARY KEY,
         owner_id INTEGER, title TEXT, question_ids TEXT,
-        shuffle_per_student INTEGER, time_limit INTEGER, panel_token TEXT, created_at REAL);
+        shuffle_per_student INTEGER, time_limit INTEGER, panel_token TEXT,
+        closed INTEGER DEFAULT 0, created_at REAL);
     CREATE TABLE IF NOT EXISTS sessions(id INTEGER PRIMARY KEY AUTOINCREMENT,
         code TEXT, token TEXT, student_id INTEGER, student_name TEXT,
         order_json TEXT, live TEXT, score INTEGER, total INTEGER,
@@ -39,6 +41,8 @@ def init():
     for col, ddl in [("stem_xml", "ALTER TABLE questions ADD COLUMN stem_xml TEXT DEFAULT '[]'")]:
         if col not in _cols("questions"):
             c.execute(ddl)
+    if "closed" not in _cols("tests"):
+        c.execute("ALTER TABLE tests ADD COLUMN closed INTEGER DEFAULT 0")
     c.commit()
 
 # ---------- media ----------
@@ -163,12 +167,29 @@ def get_test(code):
     d = dict(row); d["question_ids"] = json.loads(d["question_ids"]); return d
 
 def tests_by_owner(owner_id):
-    rows = conn().execute("SELECT code,title,question_ids,created_at,panel_token FROM tests "
+    rows = conn().execute("SELECT code,title,question_ids,created_at,panel_token,closed FROM tests "
                           "WHERE owner_id=? ORDER BY created_at DESC", (owner_id,)).fetchall()
     out = []
     for r in rows:
         d = dict(r); d["n"] = len(json.loads(d["question_ids"])); out.append(d)
     return out
+
+def set_closed(code, owner_id, closed):
+    c = conn()
+    cur = c.execute("UPDATE tests SET closed=? WHERE code=? AND owner_id=?",
+                    (1 if closed else 0, code, owner_id))
+    c.commit()
+    return cur.rowcount > 0
+
+def delete_test(code, owner_id):
+    c = conn()
+    row = c.execute("SELECT 1 FROM tests WHERE code=? AND owner_id=?", (code, owner_id)).fetchone()
+    if not row:
+        return False
+    c.execute("DELETE FROM sessions WHERE code=?", (code,))
+    c.execute("DELETE FROM tests WHERE code=? AND owner_id=?", (code, owner_id))
+    c.commit()
+    return True
 
 # ---------- web sessions ----------
 REF_WORDS = ("barcha", "hammasi", "yuqorid", "hech bir", "hech qa", "all of", "none of")
