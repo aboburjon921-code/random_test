@@ -304,6 +304,12 @@ async def on_clear(update, ctx):
 async def on_text(update, ctx):
     uid = update.effective_user.id
     text = (update.message.text or "").strip()
+    # o'quvchidan ism kutilyaptimi?
+    if ctx.user_data.get("pending_test"):
+        name = text.split()[0][:20] if text.split() else ""
+        if not name:
+            return await update.message.reply_text("Iltimos ismingizni yozing (bir so'z).")
+        return await on_name(update, ctx, name)
     if is_admin(uid):
         if text == BTN_NEW: return await start_newtest(update, ctx)
         if text == BTN_BASES: return await show_bases(update, ctx)
@@ -367,14 +373,32 @@ async def on_begin(update, ctx):
         return await q.edit_message_text(f"✅ Allaqachon yechilgan. Natija: {sc}/{tot} ({pct}%)")
     if ex and ex["status"] == "active":
         token = ex["token"]  # davom etadi
-    else:
-        name = user.full_name + (f" (@{user.username})" if user.username else "")
-        token = await asyncio.to_thread(db.create_web_session, code, user.id, name)
-        if not token:
-            return await q.edit_message_text("Testni boshlab bo'lmadi.")
+        url = f"{BASE_URL}/t/{token}"
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("🖥 Testni ochish", web_app=WebAppInfo(url=url))]])
+        return await q.edit_message_text("✅ Testingiz davom etyapti. Ochish uchun bosing 👇",
+                                         reply_markup=kb)
+    # yangi o'quvchi -> ism so'raymiz
+    ctx.user_data["pending_test"] = code
+    await q.edit_message_text("✍️ <b>Ismingizni yozing</b> (bir so'z bilan). "
+                              "Bu ism poyga oxirida natijada ko'rinadi.", parse_mode="HTML")
+
+async def on_name(update, ctx, name):
+    code = ctx.user_data.pop("pending_test", None)
+    user = update.effective_user
+    if not code:
+        return
+    test = db.get_test(code)
+    if not test or test.get("closed"):
+        return await update.message.reply_text("🔒 Bu test endi mavjud emas yoki yopilgan.")
+    if not BASE_URL:
+        return await update.message.reply_text("⚠️ Server manzili sozlanmagan.")
+    token = await asyncio.to_thread(db.create_web_session, code, user.id, name)
+    if not token:
+        return await update.message.reply_text("Testni boshlab bo'lmadi.")
     url = f"{BASE_URL}/t/{token}"
     kb = InlineKeyboardMarkup([[InlineKeyboardButton("🖥 Testni ochish", web_app=WebAppInfo(url=url))]])
-    await q.edit_message_text("✅ Vaqt boshlandi! Testni ochish uchun tugmani bosing 👇", reply_markup=kb)
+    await update.message.reply_html(f"Rahmat, <b>{name}</b>! ✅ Vaqt boshlandi.\n"
+                                    "Testni ochish uchun tugmani bosing 👇", reply_markup=kb)
 
 
 def build_app():
