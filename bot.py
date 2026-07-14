@@ -1,4 +1,3 @@
-"""Telegram bot (tugmali menyu). Test yaratish, web-oyna orqali yechish, jonli panel."""
 import os, asyncio, logging
 
 from telegram import (Update, InlineKeyboardButton, InlineKeyboardMarkup,
@@ -80,12 +79,78 @@ async def start_newtest(update, ctx):
     total = db.question_count(uid)
     if total == 0:
         return await update.message.reply_text("Avval Word baza yuboring.", reply_markup=menu())
-    btns = [InlineKeyboardButton(f"{n} ta", callback_data=f"cnt:{n}") for n in COUNTS if n <= total]
-    rows = [btns[i:i+3] for i in range(0, len(btns), 3)] if btns else []
-    rows.append([InlineKeyboardButton(f"✅ Barchasi ({total})", callback_data=f"cnt:{total}"),
-                 InlineKeyboardButton("✏️ Boshqa", callback_data="cnt:custom")])
-    await update.message.reply_text(f"Bazada {total} ta savol. Nechta savol?",
-                                    reply_markup=InlineKeyboardMarkup(rows))
+    ctx.user_data.pop("nt", None); ctx.user_data.pop("topics", None)
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🎲 Aralash (barchasidan)", callback_data="kind:mix")],
+        [InlineKeyboardButton("📚 Mavzu bo'yicha", callback_data="kind:topic")]])
+    await update.message.reply_text(
+        f"Bazada {total} ta savol ({len(db.base_list(uid))} ta mavzu). Test qanday tuzilsin?",
+        reply_markup=kb)
+
+async def on_kind(update, ctx):
+    q = update.callback_query; await q.answer()
+    uid = q.from_user.id
+    kind = q.data.split(":")[1]
+    if kind == "mix":
+        total = db.question_count(uid)
+        btns = [InlineKeyboardButton(f"{n} ta", callback_data=f"cnt:{n}") for n in COUNTS if n <= total]
+        rows = [btns[i:i+3] for i in range(0, len(btns), 3)] if btns else []
+        rows.append([InlineKeyboardButton(f"✅ Barchasi ({total})", callback_data=f"cnt:{total}"),
+                     InlineKeyboardButton("✏️ Boshqa", callback_data="cnt:custom")])
+        return await q.edit_message_text(f"Bazada {total} ta savol. Nechta savol?",
+                                         reply_markup=InlineKeyboardMarkup(rows))
+    # mavzu bo'yicha
+    bases = db.base_list(uid)
+    ctx.user_data["bases"] = {b["id"]: {"name": b["name"], "n": b["n"]} for b in bases}
+    ctx.user_data["topics"] = {b["id"]: 0 for b in bases}
+    await q.edit_message_text("📚 Har mavzudan nechta savol? ➕ / ➖ bilan sozlang:",
+                              reply_markup=_topics_kb(ctx))
+
+def _topics_kb(ctx):
+    bases = ctx.user_data.get("bases", {}); topics = ctx.user_data.get("topics", {})
+    rows = []
+    for bid, info in bases.items():
+        nm = info["name"]
+        if nm.lower().endswith(".docx"): nm = nm[:-5]
+        nm = nm[:22]
+        rows.append([
+            InlineKeyboardButton(f"{nm} · {topics.get(bid,0)}/{info['n']}", callback_data="noop"),
+            InlineKeyboardButton("➖", callback_data=f"tminus:{bid}"),
+            InlineKeyboardButton("➕", callback_data=f"tplus:{bid}")])
+    total = sum(topics.values())
+    rows.append([InlineKeyboardButton(f"✅ Davom — jami {total} ta", callback_data="tdone")])
+    return InlineKeyboardMarkup(rows)
+
+async def on_topic_step(update, ctx):
+    q = update.callback_query
+    data = q.data
+    if data == "noop":
+        return await q.answer()
+    await q.answer()
+    kind, bid = data.split(":"); bid = int(bid)
+    info = ctx.user_data.get("bases", {}).get(bid)
+    if not info:
+        return
+    cur = ctx.user_data["topics"].get(bid, 0)
+    step = 5 if info["n"] >= 20 else 1
+    if kind == "tplus":
+        cur = min(info["n"], cur + step)
+    else:
+        cur = max(0, cur - step)
+    ctx.user_data["topics"][bid] = cur
+    try:
+        await q.edit_message_reply_markup(reply_markup=_topics_kb(ctx))
+    except Exception:
+        pass
+
+async def on_topic_done(update, ctx):
+    q = update.callback_query; await q.answer()
+    topics = ctx.user_data.get("topics", {})
+    spec = [(bid, cnt) for bid, cnt in topics.items() if cnt > 0]
+    if not spec:
+        return await q.answer("Kamida bitta mavzuga son bering.", show_alert=True)
+    ctx.user_data["nt"] = {"topics": spec, "count": sum(c for _, c in spec)}
+    await ask_mode(q)
 
 async def on_count(update, ctx):
     q = update.callback_query; await q.answer()
@@ -124,10 +189,15 @@ async def on_time(update, ctx):
 async def finalize_test(update, ctx, edit):
     uid = update.effective_user.id
     nt = ctx.user_data.get("nt", {})
-    count = nt.get("count", 10); shuffle = nt.get("shuffle", 1); tlimit = nt.get("time", 30)
-    total = db.question_count(uid); count = max(1, min(count, total))
-    title = f"TEST ({count} ta, {tlimit} daq)"
-    code, n = await asyncio.to_thread(db.create_test, uid, title, count, bool(shuffle), tlimit, None)
+    shuffle = nt.get("shuffle", 1); tlimit = nt.get("time", 30)
+    if nt.get("topics"):
+        spec = nt["topics"]; count = sum(c for _, c in spec)
+        title = f"TEST ({count} ta, {tlimit} daq)"
+        code, n = await asyncio.to_thread(db.create_test_topics, uid, title, spec, bool(shuffle), tlimit)
+    else:
+        total = db.question_count(uid); count = max(1, min(nt.get("count", 10), total))
+        title = f"TEST ({count} ta, {tlimit} daq)"
+        code, n = await asyncio.to_thread(db.create_test, uid, title, count, bool(shuffle), tlimit, None)
     test = db.get_test(code)
     bot_username = (await ctx.bot.get_me()).username
     student_link = f"https://t.me/{bot_username}?start={code}"
@@ -265,6 +335,9 @@ def build_app():
     app.add_handler(CommandHandler("newtest", start_newtest))
     app.add_handler(CommandHandler("bases", show_bases))
     app.add_handler(CommandHandler("results", show_results_list))
+    app.add_handler(CallbackQueryHandler(on_kind, pattern=r"^kind:"))
+    app.add_handler(CallbackQueryHandler(on_topic_step, pattern=r"^(tplus:|tminus:|noop$)"))
+    app.add_handler(CallbackQueryHandler(on_topic_done, pattern=r"^tdone$"))
     app.add_handler(CallbackQueryHandler(on_count, pattern=r"^cnt:"))
     app.add_handler(CallbackQueryHandler(on_mode, pattern=r"^mode:"))
     app.add_handler(CallbackQueryHandler(on_time, pattern=r"^tm:"))
