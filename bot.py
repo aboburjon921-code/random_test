@@ -1,3 +1,4 @@
+
 import os, asyncio, logging
 
 from telegram import (Update, InlineKeyboardButton, InlineKeyboardMarkup,
@@ -221,20 +222,62 @@ async def finalize_test(update, ctx, edit):
 
 
 # ---- Natijalar / bazalar / tozalash ----
+def _results_markup(uid):
+    tests = db.tests_by_owner(uid)
+    rows = []
+    for t in tests[:12]:
+        code = t["code"]; closed = t.get("closed")
+        head = f"{'🔒' if closed else '🟢'} {code} — {t['n']} ta"
+        if BASE_URL:
+            url = f"{BASE_URL}/p/{code}/{t['panel_token']}"
+            rows.append([InlineKeyboardButton("📊 " + head, web_app=WebAppInfo(url=url))])
+        else:
+            rows.append([InlineKeyboardButton(head, callback_data="noop")])
+        toggle = ("🔓 Ochish", f"topen:{code}") if closed else ("🔒 Yopish", f"tclose:{code}")
+        rows.append([InlineKeyboardButton(toggle[0], callback_data=toggle[1]),
+                     InlineKeyboardButton("🗑 O'chirish", callback_data=f"tdel:{code}")])
+    return InlineKeyboardMarkup(rows) if rows else None
+
 async def show_results_list(update, ctx):
     uid = update.effective_user.id
-    tests = db.tests_by_owner(uid)
-    if not tests:
+    if not db.tests_by_owner(uid):
         return await update.message.reply_text("Hali test tuzmagansiz.", reply_markup=menu())
-    rows = []
-    for t in tests[:15]:
-        if BASE_URL:
-            url = f"{BASE_URL}/p/{t['code']}/{t['panel_token']}"
-            rows.append([InlineKeyboardButton(f"📊 {t['code']} — {t['n']} ta savol",
-                                              web_app=WebAppInfo(url=url))])
-        else:
-            rows.append([InlineKeyboardButton(f"🔑 {t['code']} — {t['n']} ta", callback_data="noop")])
-    await update.message.reply_text("Test panelini oching:", reply_markup=InlineKeyboardMarkup(rows))
+    await update.message.reply_text("📊 Testlaringiz (panel · yopish · o'chirish):",
+                                    reply_markup=_results_markup(uid))
+
+async def on_test_toggle(update, ctx):
+    q = update.callback_query
+    action, code = q.data.split(":")
+    uid = q.from_user.id
+    db.set_closed(code, uid, action == "tclose")
+    await q.answer("🔒 Test yopildi" if action == "tclose" else "🔓 Test ochildi")
+    try:
+        await q.edit_message_reply_markup(reply_markup=_results_markup(uid))
+    except Exception:
+        pass
+
+async def on_test_delete(update, ctx):
+    q = update.callback_query; await q.answer()
+    code = q.data.split(":")[1]
+    kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton("🗑 Ha, o'chir", callback_data=f"tdelyes:{code}"),
+        InlineKeyboardButton("↩️ Bekor", callback_data="tdelno")]])
+    await q.edit_message_text(f"⚠️ <b>{code}</b> testi va uning barcha natijalari o'chiriladi. Rozimisiz?",
+                              parse_mode="HTML", reply_markup=kb)
+
+async def on_test_delete_confirm(update, ctx):
+    q = update.callback_query; await q.answer()
+    uid = q.from_user.id
+    if q.data == "tdelno":
+        return await q.edit_message_text("↩️ Bekor qilindi. /results — ro'yxatni qayta oching.")
+    code = q.data.split(":")[1]
+    db.delete_test(code, uid)
+    mk = _results_markup(uid)
+    if mk:
+        await q.edit_message_text(f"🗑 <b>{code}</b> o'chirildi.\n\n📊 Qolgan testlar:",
+                                  parse_mode="HTML", reply_markup=mk)
+    else:
+        await q.edit_message_text(f"🗑 <b>{code}</b> o'chirildi. Boshqa test yo'q.", parse_mode="HTML")
 
 async def show_bases(update, ctx):
     uid = update.effective_user.id
@@ -295,6 +338,8 @@ async def offer_test(update, ctx, code):
     test = db.get_test(code)
     if not test:
         return await update.effective_message.reply_text("❌ Bunday kodli test topilmadi.")
+    if test.get("closed"):
+        return await update.effective_message.reply_text("🔒 Bu test yopilgan. O'qituvchiga murojaat qiling.")
     user = update.effective_user
     ex = db.existing_session(code, user.id)
     if ex and ex["status"] == "finished":
@@ -311,6 +356,9 @@ async def on_begin(update, ctx):
     q = update.callback_query; await q.answer()
     code = q.data.split(":")[1]
     user = q.from_user
+    test = db.get_test(code)
+    if test and test.get("closed"):
+        return await q.edit_message_text("🔒 Bu test yopilgan.")
     if not BASE_URL:
         return await q.edit_message_text("⚠️ Server manzili sozlanmagan (BASE_URL). O'qituvchiga xabar bering.")
     ex = db.existing_session(code, user.id)
@@ -342,6 +390,9 @@ def build_app():
     app.add_handler(CallbackQueryHandler(on_mode, pattern=r"^mode:"))
     app.add_handler(CallbackQueryHandler(on_time, pattern=r"^tm:"))
     app.add_handler(CallbackQueryHandler(on_clear, pattern=r"^clr:"))
+    app.add_handler(CallbackQueryHandler(on_test_toggle, pattern=r"^(tclose|topen):"))
+    app.add_handler(CallbackQueryHandler(on_test_delete, pattern=r"^tdel:"))
+    app.add_handler(CallbackQueryHandler(on_test_delete_confirm, pattern=r"^(tdelyes:|tdelno$)"))
     app.add_handler(CallbackQueryHandler(on_begin, pattern=r"^begin:"))
     app.add_handler(MessageHandler(filters.Document.ALL, on_document))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
