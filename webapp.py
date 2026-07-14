@@ -334,34 +334,54 @@ th{{background:#334155;font-size:12px;text-transform:uppercase;color:#cbd5e1}}
 .racebtn{{display:block;width:100%;background:linear-gradient(90deg,#7c3aed,#2563eb);color:#fff;border:none;
   padding:14px;border-radius:12px;font-size:16px;font-weight:800;cursor:pointer;margin-bottom:16px;
   box-shadow:0 4px 14px rgba(124,58,237,.4)}}
-/* Poyga ekrani */
-#race{{display:none;position:fixed;inset:0;z-index:300;background:linear-gradient(160deg,#0b1220,#131c34);
-  color:#fff;flex-direction:column;padding:14px 16px;overflow:hidden}}
-#race .rhead{{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}}
-#race .rhead .t{{font-size:20px;font-weight:800}}
-#race .rhead .fin{{font-size:15px;color:#a5b4fc;font-weight:700}}
-#race .rclose{{background:#334155;color:#fff;border:none;border-radius:8px;padding:8px 14px;font-weight:700;cursor:pointer}}
-#race .leader{{text-align:center;font-size:15px;color:#fde047;margin-bottom:8px;font-weight:700;min-height:20px}}
-#lanes{{flex:1;overflow-y:auto;position:relative;padding-right:6px}}
-.lane{{position:relative;height:46px;margin:6px 0;border-bottom:2px dashed rgba(255,255,255,.08)}}
-.finish{{position:absolute;right:0;top:0;bottom:0;width:4px;background:repeating-linear-gradient(0deg,#fff 0 6px,#000 6px 12px)}}
-.car{{position:absolute;top:3px;left:0;display:flex;align-items:center;gap:6px;transition:left 1s cubic-bezier(.3,1.2,.5,1);white-space:nowrap}}
-.car .av{{width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;
-  font-weight:800;font-size:15px;color:#fff;box-shadow:0 2px 6px rgba(0,0,0,.4);flex:0 0 auto}}
-.car .em{{font-size:22px}} .car .nm{{font-size:13px;font-weight:700;color:#e2e8f0}}
-.car .pt{{font-size:12px;color:#fbbf24;font-weight:800}}
-/* Podium */
-#podium{{display:none;position:fixed;inset:0;z-index:310;background:rgba(8,12,24,.94);color:#fff;
-  flex-direction:column;align-items:center;justify-content:center;text-align:center}}
-#podium h1{{font-size:30px;margin:0 0 24px}}
-.pods{{display:flex;align-items:flex-end;gap:14px}}
-.pod{{width:92px;border-radius:12px 12px 0 0;display:flex;flex-direction:column;justify-content:flex-end;
-  align-items:center;padding:10px 6px;color:#0b1220;font-weight:800}}
-.pod .medal{{font-size:30px}} .pod .pn{{font-size:14px;margin-top:4px}} .pod .ps{{font-size:13px}}
-.pod.g1{{height:180px;background:linear-gradient(#fde047,#eab308)}}
-.pod.g2{{height:140px;background:linear-gradient(#e5e7eb,#9ca3af)}}
-.pod.g3{{height:110px;background:linear-gradient(#fdba74,#c2703a)}}
-#podium .pclose{{margin-top:26px;background:#334155;color:#fff;border:none;border-radius:10px;padding:12px 22px;font-weight:700;cursor:pointer}}
+/* ===== Poyga (Mentimeter uslubi) ===== */
+#race{{display:none;position:fixed;inset:0;z-index:300;background:radial-gradient(circle at 50% 0%,#1e2a52,#0b1220);
+  color:#fff;flex-direction:column;padding:18px 26px;overflow:hidden}}
+#race .rhead{{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}}
+#race .rhead .t{{font-size:30px;font-weight:900;letter-spacing:.5px}}
+#race .rhead .btns{{display:flex;gap:8px}}
+#race .rbtn{{background:rgba(255,255,255,.12);color:#fff;border:none;border-radius:10px;padding:9px 15px;
+  font-weight:700;cursor:pointer;font-size:15px}}
+#race .rbtn:hover{{background:rgba(255,255,255,.22)}}
+#race .fin{{font-size:17px;color:#a5b4fc;font-weight:700;margin-bottom:14px}}
+#lanes{{flex:1;position:relative;margin-top:4px}}
+.row{{position:absolute;left:0;right:0;height:56px;display:flex;align-items:center;gap:14px;
+  transition:transform .8s cubic-bezier(.4,0,.2,1);will-change:transform}}
+.rank{{flex:0 0 40px;text-align:center;font-size:22px;font-weight:900;color:#64748b}}
+.bar-wrap{{flex:1;position:relative;height:42px}}
+.bar{{position:absolute;left:0;top:0;height:100%;border-radius:10px;min-width:42px;
+  transition:width .8s cubic-bezier(.4,0,.2,1);display:flex;align-items:center;justify-content:flex-end}}
+.bar .av{{width:46px;height:46px;border-radius:50%;background:#fff;display:flex;align-items:center;
+  justify-content:center;font-size:26px;box-shadow:0 3px 8px rgba(0,0,0,.35);margin-right:-6px;
+  position:absolute;right:-6px;top:50%;transform:translateY(-50%);border:3px solid rgba(255,255,255,.5)}}
+.pts{{flex:0 0 auto;font-size:20px;font-weight:900;min-width:56px;color:#fde047}}
+/* katta rejim */
+#race.big .rhead .t{{font-size:44px}} #race.big .row{{height:74px}} #race.big .bar-wrap{{height:56px}}
+#race.big .bar .av{{width:60px;height:60px;font-size:34px}} #race.big .pts{{font-size:28px}}
+#race.big .rank{{font-size:30px}}
+/* Podium (Kahoot uslubi) */
+#podium{{display:none;position:fixed;inset:0;z-index:310;background:radial-gradient(circle at 50% 20%,#3b2a72,#0b1220);
+  color:#fff;flex-direction:column;align-items:center;padding:26px 18px;overflow:auto}}
+#podium h1{{font-size:38px;margin:6px 0 26px;font-weight:900;text-shadow:0 3px 12px rgba(0,0,0,.4)}}
+.pods{{display:flex;align-items:flex-end;gap:20px;justify-content:center;flex-wrap:nowrap}}
+.pod{{display:flex;flex-direction:column;align-items:center}}
+.pod .pav{{width:76px;height:76px;border-radius:50%;background:#fff;display:flex;align-items:center;
+  justify-content:center;font-size:44px;margin-bottom:8px;box-shadow:0 4px 14px rgba(0,0,0,.4)}}
+.pod .pname{{font-size:19px;font-weight:800;margin-bottom:8px}}
+.pod .stand{{width:120px;border-radius:14px 14px 0 0;display:flex;flex-direction:column;
+  align-items:center;justify-content:flex-start;padding-top:12px;color:#0b1220;font-weight:900}}
+.pod .medal{{font-size:38px}} .pod .ps{{font-size:20px;margin-top:2px}}
+.stand.s1{{height:200px;background:linear-gradient(#fde047,#f59e0b)}}
+.stand.s2{{height:150px;background:linear-gradient(#e5e7eb,#94a3b8)}}
+.stand.s3{{height:115px;background:linear-gradient(#fdba74,#d97706)}}
+.runners{{margin-top:26px;width:100%;max-width:520px}}
+.runners .rt{{text-align:center;color:#a5b4fc;font-weight:800;margin-bottom:10px;font-size:15px}}
+.runrow{{display:flex;align-items:center;gap:12px;background:rgba(255,255,255,.08);border-radius:12px;
+  padding:9px 14px;margin-bottom:7px}}
+.runrow .rr{{font-weight:900;color:#94a3b8;min-width:26px}}
+.runrow .ra{{font-size:22px}} .runrow .rn{{flex:1;font-weight:700}} .runrow .rp{{font-weight:900;color:#fde047}}
+#podium .pclose{{margin-top:24px;background:rgba(255,255,255,.15);color:#fff;border:none;border-radius:12px;
+  padding:13px 26px;font-weight:800;cursor:pointer;font-size:15px}}
 </style></head><body>
 <h2>📊 {code} — jonli natijalar</h2>
 <div class="sub" id="sub">yuklanmoqda…</div>
@@ -374,16 +394,20 @@ th{{background:#334155;font-size:12px;text-transform:uppercase;color:#cbd5e1}}
 <div id="race">
   <div class="rhead">
     <div class="t">🏁 Poyga</div>
-    <div class="fin" id="rfin">0/0 yakunladi</div>
-    <button class="rclose" onclick="closeRace()">✕ Yopish</button>
+    <div class="btns">
+      <button class="rbtn" onclick="toggleBig2()">⛶ Katta rejim</button>
+      <button class="rbtn" onclick="revealPodium()">🏆 Natija</button>
+      <button class="rbtn" onclick="closeRace()">✕</button>
+    </div>
   </div>
-  <div class="leader" id="rleader"></div>
+  <div class="fin" id="rfin">0/0 yakunladi</div>
   <div id="lanes"></div>
 </div>
 <div id="podium">
   <h1>🎉 G'oliblar!</h1>
   <div class="pods" id="pods"></div>
-  <button class="pclose" onclick="document.getElementById('podium').style.display='none'">Yopish</button>
+  <div class="runners" id="runners"></div>
+  <button class="pclose" onclick="document.getElementById('podium').style.display='none'">✕ Yopish</button>
 </div>
 <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.3/dist/confetti.browser.min.js"></script>
 <script>
@@ -415,81 +439,92 @@ async function load(){{
 }}
 function stat(v,l){{return '<div class="stat"><div class="v">'+v+'</div><div class="l">'+l+'</div></div>';}}
 
-// ===== Poyga =====
-window.raceOn=false;
-const EMOJIS=['🚗','🏎️','🚙','🚕','🚌','🚓','🏍️','🚐','🛺','🚜'];
-function colorFor(name){{ let h=0; for(let i=0;i<name.length;i++)h=(h*31+name.charCodeAt(i))%360; return 'hsl('+h+',70%,55%)'; }}
-function emojiFor(name){{ let h=0; for(let i=0;i<name.length;i++)h=(h+name.charCodeAt(i))%EMOJIS.length; return EMOJIS[h]; }}
-function initial(name){{ const c=(name||'?').trim()[0]||'?'; return c.toUpperCase(); }}
+// ===== Poyga (Mentimeter/Kahoot uslubi) =====
+window.raceOn=false; window.podiumShown=false;
+const BAR_COLORS=['#ec4899','#3b82f6','#22c55e','#f59e0b','#8b5cf6','#ef4444','#14b8a6','#eab308',
+  '#f97316','#06b6d4','#a855f7','#84cc16','#e11d48','#0ea5e9','#10b981','#d946ef'];
+let sid2color={{}};
+function assignColor(id,idx){{ if(!(id in sid2color)) sid2color[id]=BAR_COLORS[Object.keys(sid2color).length%BAR_COLORS.length]; return sid2color[id]; }}
 
-let laneOrder=[];  // barqaror tartib (mashinalar sakramasin)
 function openRace(){{
-  window.raceOn=true;
-  laneOrder=[];
+  window.raceOn=true; window.podiumShown=false;
+  document.getElementById('lanes').innerHTML='';
   document.getElementById('race').style.display='flex';
   if(window.__last) renderRace(window.__last);
   load();
 }}
 function closeRace(){{ window.raceOn=false; document.getElementById('race').style.display='none'; }}
+function toggleBig2(){{
+  const r=document.getElementById('race'); r.classList.toggle('big');
+  try{{ if(!document.fullscreenElement) r.requestFullscreen(); else document.exitFullscreen(); }}catch(e){{}}
+}}
 
 function renderRace(d){{
-  const qt=d.q_total||1;
-  const studs=d.students||[];
-  // barqaror tartib: yangi o'quvchilarni oxiriga qo'shamiz
-  studs.forEach(s=>{{ if(!laneOrder.includes(s.name)) laneOrder.push(s.name); }});
-  const byName={{}}; studs.forEach(s=>byName[s.name]=s);
-
-  document.getElementById('rfin').textContent=d.finished+'/'+d.total_students+' yakunladi';
-  // yetakchi
-  let lead=null; studs.forEach(s=>{{ if(!lead||s.correct>lead.correct)lead=s; }});
-  document.getElementById('rleader').textContent=lead&&lead.correct>0 ? ('🥇 Eng oldinda: '+lead.name+' — '+lead.correct+' ta') : '';
-
+  const studs=(d.students||[]).slice();
+  const maxC=Math.max(1, ...studs.map(s=>s.correct||0), Math.ceil((d.q_total||1)*0.3));
+  document.getElementById('rfin').textContent='🏁 '+d.finished+'/'+d.total_students+' yakunladi';
+  // tartiblаsh: ball bo'yicha (jonli)
+  studs.forEach((s,i)=>{{ s._id=s.name+'#'+i; }});
+  const sorted=[...studs].sort((a,b)=> (b.correct||0)-(a.correct||0) || (a.answered-b.answered));
   const lanes=document.getElementById('lanes');
-  // laneларни bir marta yaratamiz, keyin faqat pozitsiyани yangilaymiz
-  laneOrder.forEach(name=>{{
-    const s=byName[name]; if(!s)return;
-    let lane=document.getElementById('lane_'+cssId(name));
-    if(!lane){{
-      lane=document.createElement('div'); lane.className='lane'; lane.id='lane_'+cssId(name);
-      lane.innerHTML='<div class="finish"></div><div class="car" id="car_'+cssId(name)+'">'+
-        '<div class="av" style="background:'+colorFor(name)+'">'+initial(name)+'</div>'+
-        '<span class="em">'+emojiFor(name)+'</span>'+
-        '<span class="nm">'+esc(name)+'</span> <span class="pt" id="pt_'+cssId(name)+'"></span></div>';
-      lanes.appendChild(lane);
-    }}
-    const frac=Math.min(1, (s.correct||0)/qt);
-    const car=document.getElementById('car_'+cssId(name));
-    car.style.left='calc('+(frac*100)+'% - '+(frac*150)+'px)';
-    document.getElementById('pt_'+cssId(name)).textContent=(s.correct||0)+'/'+qt+(s.status==='finished'?' ✅':'');
-  }});
+  const rowH = document.getElementById('race').classList.contains('big')?74:56;
 
-  // hamma yakunladimi -> podium + konfetti
+  sorted.forEach((s,rank)=>{{
+    const id=cssId(s._id);
+    let row=document.getElementById('row_'+id);
+    if(!row){{
+      row=document.createElement('div'); row.className='row'; row.id='row_'+id;
+      const col=assignColor(s._id);
+      row.innerHTML='<div class="rank" id="rk_'+id+'"></div>'+
+        '<div class="bar-wrap"><div class="bar" id="bar_'+id+'" style="background:'+col+'">'+
+        '<div class="av">'+(s.avatar||'🐵')+'</div></div></div>'+
+        '<div class="pts" id="pt_'+id+'"></div>';
+      lanes.appendChild(row);
+    }}
+    row.style.transform='translateY('+(rank*rowH)+'px)';
+    document.getElementById('rk_'+id).textContent=(rank+1);
+    const frac=Math.min(1,(s.correct||0)/maxC);
+    document.getElementById('bar_'+id).style.width=(8+frac*92)+'%';
+    document.getElementById('pt_'+id).textContent=(s.correct||0);
+  }});
+  lanes.style.height=(sorted.length*rowH+10)+'px';
+
   if(d.total_students>0 && d.finished===d.total_students && !window.podiumShown){{
-    window.podiumShown=true;
-    setTimeout(()=>showPodium(studs),900);
+    setTimeout(()=>revealPodium(),1000);
   }}
 }}
 function cssId(name){{ return name.replace(/[^a-zA-Z0-9]/g,'_'); }}
 
-function showPodium(studs){{
-  const top=[...studs].sort((a,b)=> b.score-a.score || ((a.spent||1e9)-(b.spent||1e9))).slice(0,3);
-  const medals=['🥇','🥈','🥉']; const cls=['g1','g2','g3']; const orderIdx=[1,0,2];
+function revealPodium(){{
+  const d=window.__last; if(!d)return;
+  window.podiumShown=true;
+  const studs=[...(d.students||[])].sort((a,b)=> b.score-a.score || ((a.spent||1e9)-(b.spent||1e9)));
+  const top=studs.slice(0,3), rest=studs.slice(3);
+  const medals=['🥇','🥈','🥉']; const cls=['s1','s2','s3']; const orderIdx=[1,0,2];
   const pods=document.getElementById('pods'); pods.innerHTML='';
   orderIdx.forEach(i=>{{
-    if(!top[i])return;
-    const s=top[i];
-    pods.innerHTML+='<div class="pod '+cls[i]+'"><div class="medal">'+medals[i]+'</div>'+
-      '<div class="pn">'+esc(s.name)+'</div><div class="ps">'+s.score+'/'+s.total+'</div></div>';
+    if(!top[i])return; const s=top[i];
+    pods.innerHTML+='<div class="pod"><div class="pav">'+(s.avatar||'🐵')+'</div>'+
+      '<div class="pname">'+esc(s.name)+'</div>'+
+      '<div class="stand '+cls[i]+'"><div class="medal">'+medals[i]+'</div>'+
+      '<div class="ps">'+s.score+'/'+s.total+'</div></div></div>';
   }});
+  const runners=document.getElementById('runners');
+  if(rest.length){{
+    runners.innerHTML='<div class="rt">Qolgan ishtirokchilar</div>'+rest.map((s,i)=>
+      '<div class="runrow"><span class="rr">'+(i+4)+'</span><span class="ra">'+(s.avatar||'🐵')+
+      '</span><span class="rn">'+esc(s.name)+'</span><span class="rp">'+s.score+'/'+s.total+'</span></div>'
+    ).join('');
+  }} else runners.innerHTML='';
   document.getElementById('podium').style.display='flex';
   fireConfetti();
 }}
 function fireConfetti(){{
   try{{
-    const end=Date.now()+2500;
+    const end=Date.now()+3000;
     (function frame(){{
-      confetti({{particleCount:5,angle:60,spread:70,origin:{{x:0}}}});
-      confetti({{particleCount:5,angle:120,spread:70,origin:{{x:1}}}});
+      confetti({{particleCount:6,angle:60,spread:75,origin:{{x:0}},startVelocity:55}});
+      confetti({{particleCount:6,angle:120,spread:75,origin:{{x:1}},startVelocity:55}});
       if(Date.now()<end)requestAnimationFrame(frame);
     }})();
   }}catch(e){{}}
