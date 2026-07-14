@@ -1,4 +1,3 @@
-"""FastAPI web-server: o'quvchi test oynasi va o'qituvchi paneli."""
 import time, html, json
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -146,10 +145,80 @@ function showResult(res){{
     '<div class="big">'+emoji+'</div><div>Test yakunlandi!</div>'+
     '<div class="sc">'+res.score+' / '+res.total+' ('+pct+'%)</div>'+
     '<div>Baho: <b>'+grade+'</b></div>'+wh+
-    '<button class="btn" style="margin-top:18px" onclick="try{{Telegram.WebApp.close()}}catch(e){{}}">Yopish</button>';
+    '<button class="btn" style="margin-top:18px;background:#16a34a" onclick="location.href=\\'/r/\\'+TOKEN">📖 Javoblarni ko\\'rish</button>'+
+    '<button class="btn" style="margin-top:10px" onclick="try{{Telegram.WebApp.close()}}catch(e){{}}">Yopish</button>';
   document.getElementById('result').style.display='flex';
 }}
 </script></body></html>"""
+
+
+@app.get("/r/{token}", response_class=HTMLResponse)
+def review_page(token: str):
+    s = db.get_session_by_token(token)
+    if not s:
+        return HTMLResponse("<h3>Topilmadi.</h3>", status_code=404)
+    if s["status"] != "finished":
+        return HTMLResponse("<h3>Avval testni yakunlang.</h3>", status_code=403)
+    live = s["live"]
+    letters = ["A", "B", "C", "D", "E", "F", "G", "H"]
+    cards = []
+    for i, item in enumerate(s["order"]):
+        q = db.get_question(item["qid"])
+        chosen = live.get(str(i))
+        chosen = int(chosen) if chosen is not None else None
+        correct = item["correct"]
+        ok = (chosen == correct)
+        opts_html = ""
+        for k, orig in enumerate(item["opt"]):
+            cls = ""
+            tag = ""
+            if k == correct:
+                cls = "correct"; tag = '<span class="tag tg">✓ to\'g\'ri</span>'
+            if chosen is not None and k == chosen and k != correct:
+                cls = "wrong"; tag = '<span class="tag tw">✗ siz</span>'
+            elif chosen is not None and k == chosen and k == correct:
+                tag = '<span class="tag tg">✓ siz</span>'
+            opts_html += (f'<div class="opt {cls}"><span class="lbl">{letters[k]}</span>'
+                          f'<span class="otext">{_opt_html(q, orig)}</span>{tag}</div>')
+        mark = "✅" if ok else ("❌" if chosen is not None else "⬜")
+        cards.append(f'<div class="card"><div class="qhead">{mark} {i+1}-savol</div>'
+                     f'<div class="stem">{_q_html(q)}</div><div class="opts">{opts_html}</div></div>')
+    score = s["score"]; total = s["total"]; pct = round(100*score/total) if total else 0
+    return HTMLResponse(f"""<!DOCTYPE html><html lang="uz"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Javoblar</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<script>window.MathJax={{startup:{{typeset:true}}}};</script>
+<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/mml-chtml.js" async></script>
+<style>
+body{{font-family:-apple-system,Segoe UI,Roboto,sans-serif;background:#f1f5f9;margin:0;padding:12px 12px 30px;color:#1e293b}}
+.top{{position:sticky;top:0;background:#fff;border-radius:14px;padding:14px 16px;margin-bottom:12px;
+  box-shadow:0 2px 10px rgba(0,0,0,.06);text-align:center}}
+.top .sc{{font-size:22px;font-weight:800;color:#2563eb}}
+.card{{background:#fff;border-radius:14px;padding:16px;margin-bottom:12px;box-shadow:0 2px 8px rgba(0,0,0,.05)}}
+.qhead{{font-size:13px;font-weight:700;color:#475569;margin-bottom:8px}}
+.stem{{font-size:17px;margin-bottom:12px;line-height:1.5}}
+.opts{{display:flex;flex-direction:column;gap:7px}}
+.opt{{display:flex;align-items:center;gap:10px;background:#f8fafc;border:2px solid #e2e8f0;
+  border-radius:10px;padding:10px 12px;font-size:16px;position:relative}}
+.opt .lbl{{flex:0 0 28px;height:28px;border-radius:50%;background:#e2e8f0;display:flex;
+  align-items:center;justify-content:center;font-weight:700;font-size:13px}}
+.opt.correct{{border-color:#16a34a;background:#f0fdf4}}
+.opt.correct .lbl{{background:#16a34a;color:#fff}}
+.opt.wrong{{border-color:#dc2626;background:#fef2f2}}
+.opt.wrong .lbl{{background:#dc2626;color:#fff}}
+.tag{{margin-left:auto;font-size:11px;font-weight:700;padding:2px 8px;border-radius:20px;white-space:nowrap}}
+.tag.tg{{background:#16a34a;color:#fff}} .tag.tw{{background:#dc2626;color:#fff}}
+.stem math{{font-size:1.1em}} .otext math{{font-size:1.05em}}
+.btn{{display:block;width:100%;max-width:480px;margin:10px auto;background:#2563eb;color:#fff;border:none;
+  padding:14px;border-radius:12px;font-size:16px;font-weight:700;cursor:pointer}}
+</style></head><body>
+<div class="top"><div class="sc">{score} / {total} ({pct}%)</div>
+<div style="color:#64748b;font-size:13px">🟢 to'g'ri javob · 🔴 sizning xato tanlovingiz</div></div>
+{''.join(cards)}
+<button class="btn" onclick="try{{Telegram.WebApp.close()}}catch(e){{location.href='about:blank'}}">Yopish</button>
+<script>try{{Telegram.WebApp.ready();Telegram.WebApp.expand();}}catch(e){{}}</script>
+</body></html>""")
 
 
 # ============ API ============
@@ -181,7 +250,9 @@ def _result_page(token):
 .sc{{font-size:30px;font-weight:800;color:#2563eb;margin:10px 0}}</style></head>
 <body><div class="b"><h2>✅ Test allaqachon yakunlangan</h2>
 <div class="sc">{res['score']} / {res['total']} ({pct}%)</div>
-<div style="color:#475569">❌ Xato savollar: {wrong}</div></div>
+<div style="color:#475569">❌ Xato savollar: {wrong}</div>
+<a href="/r/{token}" style="display:inline-block;margin-top:16px;background:#16a34a;color:#fff;
+  text-decoration:none;padding:12px 22px;border-radius:10px;font-weight:700">📖 Javoblarni ko'rish</a></div>
 <script>try{{Telegram.WebApp.ready();Telegram.WebApp.expand();}}catch(e){{}}</script></body></html>"""
 
 
