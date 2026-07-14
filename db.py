@@ -292,11 +292,18 @@ def panel_data(code):
         d = dict(r)
         order = json.loads(d["order_json"]); live = json.loads(d["live"] or "{}")
         answered = len(live)
+        # jonli to'g'ri javoblar soni (test davomida ham — poyga uchun)
+        correct_live = 0
+        for i, item in enumerate(order):
+            ch = live.get(str(i))
+            if ch is not None and int(ch) == item["correct"]:
+                correct_live += 1
         spent = None
         if d["status"] == "finished" and d["finished_at"]:
             spent = int(d["finished_at"] - d["started_at"])
         students.append({"name": d["student_name"], "score": d["score"], "total": d["total"],
-                         "status": d["status"], "answered": answered, "spent": spent})
+                         "status": d["status"], "answered": answered, "spent": spent,
+                         "correct": correct_live})
         if d["status"] == "finished":
             finished_n += 1; total_score += d["score"]
             for i, item in enumerate(order):
@@ -314,4 +321,5 @@ def panel_data(code):
     return {"title": test["title"], "code": code, "time_limit": test["time_limit"],
             "students": students, "avg": avg, "finished": finished_n,
             "total_students": len(students), "hardest": hardest,
-            "closed": bool(test.get("closed"))}
+            "closed": bool(test.get("closed")),
+            "q_total": len(test["question_ids"])}
