@@ -1,4 +1,4 @@
-"""FastAPI web-server: premium dizayn — o'quvchi test oynasi va o'qituvchi paneli."""
+
 import time, html, json
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
