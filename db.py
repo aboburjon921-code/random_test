@@ -1,4 +1,4 @@
-"""SQLite ombori: bazalar, savollar, testlar, web-sessiyalar, jonli natijalar."""
+
 import sqlite3, json, os, random, string, time, threading
 
 DB_PATH = os.environ.get("DB_PATH", "data.db")
@@ -37,6 +37,15 @@ def init():
         code TEXT, token TEXT, student_id INTEGER, student_name TEXT, avatar TEXT,
         order_json TEXT, live TEXT, score INTEGER, total INTEGER,
         status TEXT, started_at REAL, deadline REAL, finished_at REAL);
+
+    -- Indekslar: tez qidirish uchun
+    CREATE INDEX IF NOT EXISTS idx_questions_owner   ON questions(owner_id);
+    CREATE INDEX IF NOT EXISTS idx_questions_base    ON questions(owner_id, base_id);
+    CREATE INDEX IF NOT EXISTS idx_tests_owner       ON tests(owner_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_sessions_code     ON sessions(code);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token);
+    CREATE INDEX IF NOT EXISTS idx_sessions_student  ON sessions(code, student_id);
+    CREATE INDEX IF NOT EXISTS idx_sessions_deadline ON sessions(status, deadline);
     """)
     for col, ddl in [("stem_xml", "ALTER TABLE questions ADD COLUMN stem_xml TEXT DEFAULT '[]'")]:
         if col not in _cols("questions"):
