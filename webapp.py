@@ -1,4 +1,4 @@
-
+"""FastAPI web-server: premium dizayn — o'quvchi test oynasi va o'qituvchi paneli."""
 import time, html, json
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -9,23 +9,82 @@ import render
 app = FastAPI()
 
 
+# ─────────────────────────────────────────────
+#  HELPERS
+# ─────────────────────────────────────────────
 def _q_html(q):
-    stem = render.fragment_to_html(q["stem_xml"], db.get_media) or html.escape(q["stem"] or "")
-    return stem
-
+    return render.fragment_to_html(q["stem_xml"], db.get_media) or html.escape(q["stem"] or "")
 
 def _opt_html(q, orig):
     o = q["options"][orig]
-    h = render.fragment_to_html(o["xml"], db.get_media) or html.escape(o["text"] or "")
-    return h
+    return render.fragment_to_html(o["xml"], db.get_media) or html.escape(o["text"] or "")
 
 
-# ============ O'QUVCHI TEST OYNASI ============
+# ─────────────────────────────────────────────
+#  SHARED CSS / FONTS / BASE STYLE
+# ─────────────────────────────────────────────
+_BASE_STYLE = """
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
+
+:root {
+  --bg1: #0a0a1a;
+  --bg2: #0f0f2e;
+  --glass: rgba(255,255,255,0.07);
+  --glass-border: rgba(255,255,255,0.12);
+  --neon: #6c63ff;
+  --neon2: #a855f7;
+  --green: #10b981;
+  --red: #ef4444;
+  --yellow: #f59e0b;
+  --gold: #f59e0b;
+  --silver: #94a3b8;
+  --bronze: #cd7c2f;
+  --text: #f1f5f9;
+  --muted: #94a3b8;
+  --card-r: 18px;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: 'Inter', -apple-system, sans-serif;
+  background: var(--bg1);
+  color: var(--text);
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+body::before {
+  content: '';
+  position: fixed; inset: 0; z-index: -1;
+  background:
+    radial-gradient(ellipse at 20% 20%, rgba(108,99,255,0.18) 0%, transparent 50%),
+    radial-gradient(ellipse at 80% 80%, rgba(168,85,247,0.15) 0%, transparent 50%),
+    radial-gradient(ellipse at 50% 50%, rgba(10,10,30,1) 0%, rgba(5,5,20,1) 100%);
+}
+"""
+
+_STAR_JS = """
+(function(){
+  const c=document.createElement('canvas');
+  c.style.cssText='position:fixed;inset:0;z-index:-1;pointer-events:none';
+  document.body.prepend(c);
+  const ctx=c.getContext('2d');
+  let W,H,stars=[];
+  function resize(){W=c.width=innerWidth;H=c.height=innerHeight;}
+  function init(){resize();stars=[];for(let i=0;i<120;i++)stars.push({x:Math.random()*W,y:Math.random()*H,r:Math.random()*1.5+0.3,a:Math.random(),da:0.003+Math.random()*0.007});}
+  function draw(){ctx.clearRect(0,0,W,H);stars.forEach(s=>{s.a+=s.da;if(s.a>1||s.a<0)s.da=-s.da;ctx.beginPath();ctx.arc(s.x,s.y,s.r,0,6.28);ctx.fillStyle='rgba(255,255,255,'+s.a+')';ctx.fill();});requestAnimationFrame(draw);}
+  window.addEventListener('resize',resize);
+  init();draw();
+})();
+"""
+
+
+# ─────────────────────────────────────────────
+#  STUDENT TEST PAGE  /t/{token}
+# ─────────────────────────────────────────────
 @app.get("/t/{token}", response_class=HTMLResponse)
 def student_page(token: str):
     s = db.get_session_by_token(token)
     if not s:
-        return HTMLResponse("<h3>Test topilmadi yoki muddati o'tgan.</h3>", status_code=404)
+        return HTMLResponse(_error_page("Test topilmadi yoki muddati o'tgan."), status_code=404)
     if s["status"] == "finished":
         return HTMLResponse(_result_page(token))
     now = time.time()
@@ -34,501 +93,978 @@ def student_page(token: str):
         db.submit_session(token)
         return HTMLResponse(_result_page(token))
 
-    cards = []
     letters = ["A", "B", "C", "D", "E", "F", "G", "H"]
+    cards_data = []
     for i, item in enumerate(s["order"]):
         q = db.get_question(item["qid"])
-        opts_html = ""
+        opts = []
         for k, orig in enumerate(item["opt"]):
-            opts_html += (
-                f'<button class="opt" data-q="{i}" data-k="{k}" onclick="pick({i},{k},this)">'
-                f'<span class="lbl">{letters[k]}</span>'
-                f'<span class="otext">{_opt_html(q, orig)}</span></button>')
-        cards.append(
-            f'<div class="card" id="card{i}"><div class="qhead">{i+1}-savol</div>'
-            f'<div class="stem">{_q_html(q)}</div>'
-            f'<div class="opts">{opts_html}</div></div>')
-    return HTMLResponse(_test_page(token, remaining, len(s["order"]), "".join(cards)))
+            opts.append({
+                "k": k,
+                "letter": letters[k],
+                "html": _opt_html(q, orig)
+            })
+        cards_data.append({
+            "i": i,
+            "stem": _q_html(q),
+            "opts": opts
+        })
+
+    cards_json = json.dumps(cards_data, ensure_ascii=False)
+    total = len(s["order"])
+    name = html.escape(s.get("student_name") or "O'quvchi")
+    avatar = html.escape(s.get("avatar") or "🐵")
+
+    return HTMLResponse(_test_page_html(token, remaining, total, cards_json, name, avatar))
 
 
-def _test_page(token, remaining, total, cards):
-    return f"""<!DOCTYPE html><html lang="uz"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-<title>Test</title>
+def _test_page_html(token, remaining, total, cards_json, name, avatar):
+    return f"""<!DOCTYPE html>
+<html lang="uz">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Test — {name}</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
-<script>
-window.MathJax={{tex:{{}},options:{{}},startup:{{typeset:false}}}};
-</script>
+<script>window.MathJax={{tex:{{}},options:{{}},startup:{{typeset:false}}}};</script>
 <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/mml-chtml.js" id="MathJax-script" async></script>
+<script src="https://cdn.jsdelivr.net/npm/js-confetti@latest/dist/js-confetti.browser.js"></script>
 <style>
-:root{{--pri:#2563eb;--bg:#f1f5f9;--card:#fff;--ok:#16a34a;}}
-*{{box-sizing:border-box}}
-body{{font-family:-apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);margin:0;padding:12px 12px 90px;color:#1e293b}}
-.topbar{{position:sticky;top:0;z-index:50;background:var(--card);border-radius:14px;padding:12px 16px;
-  box-shadow:0 2px 10px rgba(0,0,0,.06);display:flex;justify-content:space-between;align-items:center;margin-bottom:14px}}
-.timer{{font-size:20px;font-weight:800;color:var(--pri)}}
-.timer.warn{{color:#dc2626}}
-.prog{{font-size:13px;color:#64748b;font-weight:600}}
-.card{{background:var(--card);border-radius:14px;padding:16px;margin-bottom:12px;box-shadow:0 2px 8px rgba(0,0,0,.05)}}
-.qhead{{font-size:12px;font-weight:700;color:var(--pri);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px}}
-.stem{{font-size:17px;margin-bottom:14px;line-height:1.5}}
-.opts{{display:flex;flex-direction:column;gap:8px}}
-.opt{{display:flex;align-items:center;gap:12px;width:100%;text-align:left;background:#f8fafc;border:2px solid #e2e8f0;
-  border-radius:10px;padding:12px 14px;font-size:16px;cursor:pointer;transition:.15s;color:#1e293b}}
-.opt .lbl{{flex:0 0 30px;height:30px;border-radius:50%;background:#e2e8f0;display:flex;align-items:center;
-  justify-content:center;font-weight:700;font-size:14px}}
-.opt.sel{{border-color:var(--pri);background:#eff6ff}}
-.opt.sel .lbl{{background:var(--pri);color:#fff}}
-.otext math{{font-size:1.05em}}
-.stem math{{font-size:1.1em}}
-.submitbar{{position:fixed;bottom:0;left:0;right:0;padding:12px;background:linear-gradient(transparent,var(--bg) 30%)}}
-.btn{{width:100%;max-width:480px;margin:0 auto;display:block;background:var(--pri);color:#fff;border:none;
-  padding:16px;border-radius:12px;font-size:17px;font-weight:700;box-shadow:0 4px 14px rgba(37,99,235,.4);cursor:pointer}}
-.btn:disabled{{opacity:.6}}
-#result{{position:fixed;inset:0;background:rgba(15,23,42,.6);display:none;align-items:center;justify-content:center;z-index:100;padding:20px}}
-.rbox{{background:#fff;border-radius:18px;padding:26px;max-width:420px;width:100%;text-align:center;max-height:85vh;overflow:auto}}
-.rbox .big{{font-size:40px;margin:6px 0}}
-.rbox .sc{{font-size:26px;font-weight:800;margin:8px 0}}
-.wrongs{{text-align:left;margin-top:14px;font-size:14px;color:#475569}}
-</style></head><body>
-<div class="topbar"><div class="timer" id="timer">--:--</div><div class="prog" id="prog">0/{total}</div></div>
-{cards}
-<div class="submitbar"><button class="btn" id="sbtn" onclick="submitTest()">✅ Testni yakunlash</button></div>
-<div id="result"><div class="rbox" id="rbox"></div></div>
-<script>
-const TOKEN="{token}"; const TOTAL={total};
-let remaining={remaining}; const answers={{}};
-try{{Telegram.WebApp.ready();Telegram.WebApp.expand();Telegram.WebApp.disableClosingConfirmation&&Telegram.WebApp.enableClosingConfirmation();}}catch(e){{}}
+{_BASE_STYLE}
 
-function pick(q,k,el){{
-  answers[q]=k;
-  const card=document.getElementById('card'+q);
-  card.querySelectorAll('.opt').forEach(b=>b.classList.remove('sel'));
-  el.classList.add('sel');
-  document.getElementById('prog').textContent=Object.keys(answers).length+'/'+TOTAL;
-  fetch('/api/answer',{{method:'POST',headers:{{'Content-Type':'application/json'}},
-    body:JSON.stringify({{token:TOKEN,i:q,pos:k}})}}).catch(()=>{{}});
+/* ── TOPBAR ── */
+.topbar {{
+  position: sticky; top: 0; z-index: 50;
+  padding: 10px 16px;
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  background: rgba(10,10,26,0.85);
+  backdrop-filter: blur(20px);
+  border-bottom: 1px solid var(--glass-border);
 }}
-function fmt(s){{const m=Math.floor(s/60),x=s%60;return m+':'+(x<10?'0':'')+x;}}
-function tick(){{
-  const t=document.getElementById('timer');
-  t.textContent=fmt(remaining);
-  if(remaining<=60)t.classList.add('warn');
-  if(remaining<=0){{doSubmit(true);return;}}
-  remaining--; setTimeout(tick,1000);
+.user-info {{ display: flex; align-items: center; gap: 8px; }}
+.user-avatar {{ font-size: 22px; }}
+.user-name {{ font-size: 13px; font-weight: 700; color: var(--text); max-width: 100px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
+
+/* ── RING TIMER ── */
+.timer-wrap {{ position: relative; width: 52px; height: 52px; flex-shrink: 0; }}
+.timer-svg {{ transform: rotate(-90deg); }}
+.timer-track {{ fill: none; stroke: rgba(255,255,255,0.1); stroke-width: 4; }}
+.timer-ring {{ fill: none; stroke-width: 4; stroke-linecap: round; transition: stroke-dashoffset 1s linear, stroke 1s; }}
+.timer-text {{
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 800; letter-spacing: -0.5px;
+}}
+
+/* ── PROGRESS BAR ── */
+.prog-wrap {{ flex: 1; }}
+.prog-label {{ font-size: 11px; color: var(--muted); font-weight: 600; margin-bottom: 5px; text-align: center; }}
+.prog-bar-bg {{ height: 6px; background: rgba(255,255,255,0.08); border-radius: 99px; overflow: hidden; }}
+.prog-bar-fill {{ height: 100%; background: linear-gradient(90deg, var(--neon), var(--neon2)); border-radius: 99px; transition: width 0.4s cubic-bezier(.4,0,.2,1); width: 0%; }}
+
+/* ── CARD CONTAINER ── */
+.cards-wrap {{ padding: 16px 16px 110px; }}
+.card {{
+  display: none;
+  background: var(--glass);
+  border: 1px solid var(--glass-border);
+  backdrop-filter: blur(16px);
+  border-radius: var(--card-r);
+  padding: 20px 18px;
+  animation: fadeIn 0.35s ease;
+}}
+.card.active {{ display: block; }}
+@keyframes fadeIn {{ from {{ opacity:0; transform: translateY(12px) scale(0.98); }} to {{ opacity:1; transform:none; }} }}
+
+.qnum {{
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px;
+  color: var(--neon2); margin-bottom: 14px;
+}}
+.qnum-badge {{
+  background: linear-gradient(135deg, var(--neon), var(--neon2));
+  color: white; border-radius: 6px; padding: 2px 8px; font-size: 11px; font-weight: 800;
+}}
+.stem {{ font-size: 17px; line-height: 1.6; color: var(--text); margin-bottom: 18px; }}
+.stem math, .otext math {{ font-size: 1.05em; }}
+
+/* ── OPTIONS ── */
+.opts {{ display: flex; flex-direction: column; gap: 10px; }}
+.opt {{
+  display: flex; align-items: center; gap: 12px;
+  background: rgba(255,255,255,0.04);
+  border: 2px solid rgba(255,255,255,0.1);
+  border-radius: 13px; padding: 13px 14px;
+  cursor: pointer; transition: all 0.2s cubic-bezier(.4,0,.2,1);
+  text-align: left; width: 100%; color: var(--text);
+  font-size: 15px; font-family: inherit; position: relative; overflow: hidden;
+}}
+.opt::before {{
+  content: ''; position: absolute; inset: 0;
+  background: linear-gradient(135deg, var(--neon), var(--neon2));
+  opacity: 0; transition: opacity 0.2s;
+}}
+.opt:active {{ transform: scale(0.98); }}
+.opt.sel {{
+  border-color: var(--neon);
+  background: rgba(108,99,255,0.15);
+  box-shadow: 0 0 0 1px var(--neon), 0 4px 20px rgba(108,99,255,0.3);
+}}
+.opt.sel .opt-lbl {{
+  background: linear-gradient(135deg, var(--neon), var(--neon2));
+  color: white; border-color: transparent;
+  box-shadow: 0 0 12px rgba(108,99,255,0.6);
+}}
+.opt-lbl {{
+  flex-shrink: 0; width: 34px; height: 34px; border-radius: 10px;
+  border: 2px solid rgba(255,255,255,0.2);
+  display: flex; align-items: center; justify-content: center;
+  font-weight: 800; font-size: 14px; transition: all 0.2s; position: relative; z-index: 1;
+}}
+.otext {{ flex: 1; position: relative; z-index: 1; }}
+
+/* ── PULSE ANIM on select ── */
+@keyframes pulse-ring {{
+  0% {{ box-shadow: 0 0 0 0 rgba(108,99,255,0.6); }}
+  100% {{ box-shadow: 0 0 0 14px rgba(108,99,255,0); }}
+}}
+.opt.sel {{ animation: pulse-ring 0.5s ease-out; }}
+
+/* ── NAV BUTTONS ── */
+.nav-bar {{
+  position: fixed; bottom: 0; left: 0; right: 0;
+  padding: 12px 16px; display: flex; gap: 10px;
+  background: linear-gradient(to top, rgba(10,10,26,0.98) 60%, transparent);
+  backdrop-filter: blur(10px);
+}}
+.btn {{
+  height: 52px; border-radius: 14px; border: none; cursor: pointer;
+  font-size: 15px; font-weight: 700; font-family: inherit;
+  transition: all 0.2s; display: flex; align-items: center; justify-content: center; gap: 6px;
+}}
+.btn:active {{ transform: scale(0.97); }}
+.btn-prev {{
+  background: rgba(255,255,255,0.08); color: var(--text); width: 52px; flex-shrink: 0;
+  border: 1px solid var(--glass-border);
+}}
+.btn-next {{
+  flex: 1;
+  background: linear-gradient(135deg, var(--neon), var(--neon2));
+  color: white;
+  box-shadow: 0 4px 20px rgba(108,99,255,0.4);
+}}
+.btn-finish {{
+  flex: 1;
+  background: linear-gradient(135deg, #10b981, #059669);
+  color: white;
+  box-shadow: 0 4px 20px rgba(16,185,129,0.4);
+}}
+.btn:disabled {{ opacity: 0.45; cursor: not-allowed; transform: none; box-shadow: none; }}
+
+/* ── RESULT OVERLAY ── */
+#result-overlay {{
+  position: fixed; inset: 0; z-index: 200;
+  background: rgba(5,5,20,0.92); backdrop-filter: blur(20px);
+  display: none; flex-direction: column; align-items: center; justify-content: center;
+  padding: 24px;
+}}
+.result-box {{
+  background: var(--glass); border: 1px solid var(--glass-border);
+  border-radius: 24px; padding: 30px 24px; width: 100%; max-width: 440px;
+  text-align: center; position: relative; overflow: hidden;
+}}
+.result-box::before {{
+  content: ''; position: absolute; inset: 0;
+  background: linear-gradient(135deg, rgba(108,99,255,0.08), rgba(168,85,247,0.08));
+  pointer-events: none;
+}}
+.result-emoji {{ font-size: 64px; line-height: 1; margin-bottom: 10px; display: block; }}
+.result-title {{ font-size: 22px; font-weight: 800; margin-bottom: 6px; }}
+.result-score {{
+  font-size: 52px; font-weight: 900;
+  background: linear-gradient(135deg, var(--neon), var(--neon2));
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  margin: 10px 0 4px;
+}}
+.result-pct {{ font-size: 16px; color: var(--muted); font-weight: 600; }}
+.grade-badge {{
+  display: inline-block; margin: 14px 0;
+  padding: 8px 22px; border-radius: 99px;
+  font-size: 17px; font-weight: 800;
+  background: linear-gradient(135deg, var(--neon), var(--neon2));
+  box-shadow: 0 4px 20px rgba(108,99,255,0.4);
+}}
+.wrong-list {{
+  text-align: left; background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.2);
+  border-radius: 12px; padding: 12px 14px; margin-top: 14px; font-size: 13px;
+}}
+.wrong-list-title {{ font-weight: 700; color: #fca5a5; margin-bottom: 6px; }}
+.wrong-nums {{ color: var(--muted); line-height: 1.8; }}
+.result-btns {{ display: flex; gap: 10px; margin-top: 18px; }}
+.rbtn {{
+  flex: 1; height: 48px; border-radius: 12px; border: none; cursor: pointer;
+  font-size: 14px; font-weight: 700; font-family: inherit; transition: all 0.2s;
+}}
+.rbtn-review {{
+  background: rgba(255,255,255,0.1); color: var(--text);
+  border: 1px solid var(--glass-border);
+}}
+.rbtn-close {{
+  background: linear-gradient(135deg, var(--neon), var(--neon2));
+  color: white; box-shadow: 0 4px 14px rgba(108,99,255,0.4);
+}}
+</style>
+</head>
+<body>
+
+<!-- TOPBAR -->
+<div class="topbar">
+  <div class="user-info">
+    <span class="user-avatar">{avatar}</span>
+    <span class="user-name">{name}</span>
+  </div>
+  <div class="prog-wrap">
+    <div class="prog-label" id="prog-label">0 / {total} javoblandi</div>
+    <div class="prog-bar-bg"><div class="prog-bar-fill" id="prog-fill"></div></div>
+  </div>
+  <div class="timer-wrap">
+    <svg class="timer-svg" width="52" height="52" viewBox="0 0 52 52">
+      <circle class="timer-track" cx="26" cy="26" r="22"/>
+      <circle class="timer-ring" id="timer-ring" cx="26" cy="26" r="22"
+        stroke="url(#tg)"
+        stroke-dasharray="138.2"
+        stroke-dashoffset="0"/>
+      <defs>
+        <linearGradient id="tg" x1="0%" y1="0%" x2="100%" y2="0%">
+          <stop id="tg1" offset="0%" stop-color="#10b981"/>
+          <stop id="tg2" offset="100%" stop-color="#34d399"/>
+        </linearGradient>
+      </defs>
+    </svg>
+    <div class="timer-text" id="timer-txt">--</div>
+  </div>
+</div>
+
+<!-- CARDS -->
+<div class="cards-wrap" id="cards-wrap"></div>
+
+<!-- NAV BAR -->
+<div class="nav-bar">
+  <button class="btn btn-prev" id="btn-prev" onclick="nav(-1)">‹</button>
+  <button class="btn btn-next" id="btn-next" onclick="nav(1)">Keyingisi ›</button>
+  <button class="btn btn-finish" id="btn-finish" onclick="submitTest()" style="display:none">✅ Yakunlash</button>
+</div>
+
+<!-- RESULT OVERLAY -->
+<div id="result-overlay">
+  <div class="result-box">
+    <span class="result-emoji" id="res-emoji">🏆</span>
+    <div class="result-title" id="res-title">Test yakunlandi!</div>
+    <div class="result-score" id="res-score">0 / {total}</div>
+    <div class="result-pct" id="res-pct">0%</div>
+    <div class="grade-badge" id="res-grade">Baho: 5</div>
+    <div class="wrong-list" id="res-wrong" style="display:none">
+      <div class="wrong-list-title">❌ Xato savollar:</div>
+      <div class="wrong-nums" id="res-wrong-nums"></div>
+    </div>
+    <div class="result-btns">
+      <button class="rbtn rbtn-review" onclick="goReview()">📖 Ko'rish</button>
+      <button class="rbtn rbtn-close" onclick="closeApp()">✓ Yopish</button>
+    </div>
+  </div>
+</div>
+
+<script>
+{_STAR_JS}
+const TOKEN = "{token}";
+const TOTAL = {total};
+const CARDS = {cards_json};
+const CIRCUMFERENCE = 138.2;
+let REMAINING = {remaining};
+const FULL_TIME = {remaining};
+const answers = {{}};
+let curIdx = 0;
+let submitted = false;
+
+// ── INIT ──
+try {{ Telegram.WebApp.ready(); Telegram.WebApp.expand(); Telegram.WebApp.enableClosingConfirmation(); }} catch(e) {{}}
+
+function buildCards() {{
+  const wrap = document.getElementById('cards-wrap');
+  CARDS.forEach((cd, i) => {{
+    const div = document.createElement('div');
+    div.className = 'card' + (i===0 ? ' active' : '');
+    div.id = 'card' + i;
+    let optsHtml = '';
+    cd.opts.forEach(o => {{
+      optsHtml += `<button class="opt" id="opt-${{i}}-${{o.k}}" data-q="${{i}}" data-k="${{o.k}}" onclick="pick(${{i}},${{o.k}},this)">
+        <span class="opt-lbl">${{o.letter}}</span>
+        <span class="otext">${{o.html}}</span>
+      </button>`;
+    }});
+    div.innerHTML = `
+      <div class="qnum"><span class="qnum-badge">${{i+1}}</span> — ${{TOTAL}} ta savol</div>
+      <div class="stem">${{cd.stem}}</div>
+      <div class="opts">${{optsHtml}}</div>
+    `;
+    wrap.appendChild(div);
+  }});
+  updateNav();
+  if(window.MathJax) MathJax.typesetPromise().catch(()=>{{}});
+}}
+
+function pick(q, k, el) {{
+  answers[q] = k;
+  document.querySelectorAll(`[data-q="${{q}}"]`).forEach(b => b.classList.remove('sel'));
+  el.classList.add('sel');
+  updateProgress();
+  fetch('/api/answer', {{method:'POST',headers:{{'Content-Type':'application/json'}},
+    body:JSON.stringify({{token:TOKEN,i:q,pos:k}})}}).catch(()=>{{}});
+  // Auto-advance after short delay if not last
+  if (q < TOTAL - 1) {{
+    setTimeout(() => {{ if(answers[q]===k) nav(1); }}, 400);
+  }}
+}}
+
+function nav(dir) {{
+  const next = curIdx + dir;
+  if(next < 0 || next >= TOTAL) return;
+  document.getElementById('card'+curIdx).classList.remove('active');
+  curIdx = next;
+  document.getElementById('card'+curIdx).classList.add('active');
+  if(window.MathJax) MathJax.typesetPromise([document.getElementById('card'+curIdx)]).catch(()=>{{}});
+  updateNav();
+}}
+
+function updateNav() {{
+  const prev = document.getElementById('btn-prev');
+  const nxt = document.getElementById('btn-next');
+  const fin = document.getElementById('btn-finish');
+  prev.disabled = (curIdx === 0);
+  if(curIdx === TOTAL - 1) {{
+    nxt.style.display = 'none'; fin.style.display = 'flex';
+  }} else {{
+    nxt.style.display = 'flex'; fin.style.display = 'none';
+  }}
+}}
+
+function updateProgress() {{
+  const n = Object.keys(answers).length;
+  document.getElementById('prog-label').textContent = n + ' / ' + TOTAL + ' javoblandi';
+  document.getElementById('prog-fill').style.width = (n/TOTAL*100) + '%';
+}}
+
+// ── TIMER ──
+function fmtTime(s) {{
+  const m=Math.floor(s/60), x=s%60;
+  return m+':'+(x<10?'0':'')+x;
+}}
+function tick() {{
+  const ring = document.getElementById('timer-ring');
+  const txt = document.getElementById('timer-txt');
+  const tg1 = document.getElementById('tg1'), tg2 = document.getElementById('tg2');
+  txt.textContent = fmtTime(REMAINING);
+  const frac = REMAINING / FULL_TIME;
+  ring.style.strokeDashoffset = CIRCUMFERENCE * (1 - frac);
+  if(frac > 0.5) {{ tg1.setAttribute('stop-color','#10b981'); tg2.setAttribute('stop-color','#34d399'); }}
+  else if(frac > 0.2) {{ tg1.setAttribute('stop-color','#f59e0b'); tg2.setAttribute('stop-color','#fbbf24'); }}
+  else {{ tg1.setAttribute('stop-color','#ef4444'); tg2.setAttribute('stop-color','#f87171'); }}
+  if(REMAINING <= 0) {{ doSubmit(true); return; }}
+  REMAINING--;
+  setTimeout(tick, 1000);
 }}
 tick();
-let sent=false;
-function submitTest(){{
-  const left=TOTAL-Object.keys(answers).length;
-  if(left>0){{
-    const msg=left+' ta savol javobsiz. Baribir yakunlaysizmi?';
-    if(Telegram.WebApp.showConfirm){{Telegram.WebApp.showConfirm(msg,ok=>{{if(ok)doSubmit(false);}});return;}}
-    if(!confirm(msg))return;
+
+// ── SUBMIT ──
+function submitTest() {{
+  const left = TOTAL - Object.keys(answers).length;
+  if(left > 0) {{
+    const msg = left + ' ta savol javobsiz qoldi. Baribir yakunlaysizmi?';
+    try {{
+      Telegram.WebApp.showConfirm(msg, ok => {{ if(ok) doSubmit(false); }});
+    }} catch(e) {{
+      if(confirm(msg)) doSubmit(false);
+    }}
+    return;
   }}
   doSubmit(false);
 }}
-function doSubmit(auto){{
-  if(sent)return; sent=true;
-  document.getElementById('sbtn').disabled=true;
-  fetch('/api/submit',{{method:'POST',headers:{{'Content-Type':'application/json'}},
+function doSubmit(auto) {{
+  if(submitted) return; submitted = true;
+  document.getElementById('btn-finish').disabled = true;
+  fetch('/api/submit', {{method:'POST',headers:{{'Content-Type':'application/json'}},
     body:JSON.stringify({{token:TOKEN,answers:answers}})}})
-    .then(r=>r.json()).then(showResult).catch(()=>{{sent=false;}});
+    .then(r=>r.json()).then(showResult)
+    .catch(()=>{{ submitted=false; }});
 }}
-function showResult(res){{
-  const pct=res.total?Math.round(100*res.score/res.total):0;
-  let grade='2',emoji='📚';
-  if(pct>=90){{grade='5';emoji='🏆';}}else if(pct>=70){{grade='4';emoji='👍';}}else if(pct>=50){{grade='3';emoji='🙂';}}
-  const wrong=res.detail.filter(d=>!d.ok).map(d=>d.i+1);
-  let wh='';
-  if(wrong.length)wh='<div class="wrongs">❌ Xato savollar: '+wrong.join(', ')+'</div>';
-  document.getElementById('rbox').innerHTML=
-    '<div class="big">'+emoji+'</div><div>Test yakunlandi!</div>'+
-    '<div class="sc">'+res.score+' / '+res.total+' ('+pct+'%)</div>'+
-    '<div>Baho: <b>'+grade+'</b></div>'+wh+
-    '<button class="btn" style="margin-top:18px;background:#16a34a" onclick="location.href=\\'/r/\\'+TOKEN">📖 Javoblarni ko\\'rish</button>'+
-    '<button class="btn" style="margin-top:10px" onclick="try{{Telegram.WebApp.close()}}catch(e){{}}">Yopish</button>';
-  document.getElementById('result').style.display='flex';
+
+// ── RESULT ──
+let confettiInstance;
+function showResult(res) {{
+  const pct = res.total ? Math.round(100*res.score/res.total) : 0;
+  let emoji='📚', title='Harakat qiling!', grade='2';
+  if(pct>=90) {{ emoji='🏆'; title='Ajoyib natija!'; grade='5'; }}
+  else if(pct>=70) {{ emoji='🌟'; title='Yaxshi natija!'; grade='4'; }}
+  else if(pct>=50) {{ emoji='🙂'; title='O\'tdi!'; grade='3'; }}
+
+  document.getElementById('res-emoji').textContent = emoji;
+  document.getElementById('res-title').textContent = title;
+  document.getElementById('res-grade').textContent = 'Baho: ' + grade;
+  document.getElementById('res-pct').textContent = pct + '%';
+
+  // Animate score count-up
+  let cur = 0;
+  const target = res.score;
+  const el = document.getElementById('res-score');
+  el.textContent = '0 / ' + res.total;
+  const step = () => {{
+    if(cur < target) {{ cur++; el.textContent = cur+' / '+res.total; requestAnimationFrame(step); }}
+    else {{ el.textContent = target+' / '+res.total; }}
+  }};
+  setTimeout(step, 300);
+
+  // Wrong list
+  const wrong = res.detail.filter(d=>!d.ok).map(d=>d.i+1);
+  if(wrong.length) {{
+    document.getElementById('res-wrong').style.display='block';
+    document.getElementById('res-wrong-nums').textContent = wrong.join(', ');
+  }}
+
+  document.getElementById('result-overlay').style.display='flex';
+
+  // Confetti
+  if(pct >= 50) {{
+    try {{
+      confettiInstance = new JSConfetti();
+      confettiInstance.addConfetti({{
+        confettiColors: pct>=90 ? ['#f59e0b','#fbbf24','#ffffff','#6c63ff'] : ['#6c63ff','#a855f7','#ffffff'],
+        confettiRadius: 4, confettiNumber: pct>=90 ? 400 : 150,
+      }});
+    }} catch(e) {{}}
+  }}
 }}
-</script></body></html>"""
+
+function goReview() {{ location.href = '/r/' + TOKEN; }}
+function closeApp() {{ try {{ Telegram.WebApp.close(); }} catch(e) {{ history.back(); }} }}
+
+// ── BUILD ──
+buildCards();
+</script>
+</body>
+</html>"""
 
 
+# ─────────────────────────────────────────────
+#  RESULT PAGE (already finished)
+# ─────────────────────────────────────────────
+def _result_page(token):
+    s = db.get_session_by_token(token)
+    if not s:
+        return _error_page("Sessiya topilmadi.")
+    sc = s["score"]; tot = s["total"]
+    pct = round(100*sc/tot) if tot else 0
+    emoji = "🏆" if pct>=90 else "🌟" if pct>=70 else "🙂" if pct>=50 else "📚"
+    grade = "5" if pct>=90 else "4" if pct>=70 else "3" if pct>=50 else "2"
+    name = html.escape(s.get("student_name") or "")
+    avatar = html.escape(s.get("avatar") or "🐵")
+
+    return f"""<!DOCTYPE html>
+<html lang="uz"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<title>Natija</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/js-confetti@latest/dist/js-confetti.browser.js"></script>
+<style>
+{_BASE_STYLE}
+body {{ display:flex; align-items:center; justify-content:center; min-height:100vh; padding:24px; }}
+.box {{
+  background: var(--glass); border:1px solid var(--glass-border);
+  backdrop-filter:blur(20px); border-radius:24px; padding:32px 24px;
+  width:100%; max-width:420px; text-align:center;
+}}
+.av {{ font-size:48px; margin-bottom:8px; }}
+.who {{ font-size:15px; font-weight:700; color:var(--muted); margin-bottom:20px; }}
+.big-emoji {{ font-size:72px; display:block; margin-bottom:8px; }}
+.score-wrap {{ margin:16px 0; }}
+.score {{
+  font-size:56px; font-weight:900; line-height:1;
+  background: linear-gradient(135deg, var(--neon), var(--neon2));
+  -webkit-background-clip:text; -webkit-text-fill-color:transparent;
+}}
+.of {{ font-size:18px; color:var(--muted); font-weight:600; margin-top:4px; }}
+.pct {{ font-size:16px; color:var(--muted); margin-top:2px; }}
+.grade {{
+  display:inline-block; margin:14px 0;
+  padding:10px 26px; border-radius:99px; font-size:18px; font-weight:800;
+  background:linear-gradient(135deg,var(--neon),var(--neon2));
+  box-shadow:0 4px 20px rgba(108,99,255,.4);
+}}
+.btns {{ display:flex; gap:10px; margin-top:20px; }}
+.btn {{
+  flex:1; height:50px; border-radius:13px; border:none; cursor:pointer;
+  font-size:15px; font-weight:700; font-family:inherit; transition:all .2s;
+}}
+.btn-r {{ background:rgba(255,255,255,.08); color:var(--text); border:1px solid var(--glass-border); }}
+.btn-c {{ background:linear-gradient(135deg,var(--neon),var(--neon2)); color:white; }}
+.btn:active {{ transform:scale(.97); }}
+</style>
+</head><body>
+<div class="box">
+  <div class="av">{avatar}</div>
+  <div class="who">{name}</div>
+  <span class="big-emoji">{emoji}</span>
+  <div class="score-wrap">
+    <div class="score">{sc}</div>
+    <div class="of">/ {tot} ta savol</div>
+    <div class="pct">{pct}%</div>
+  </div>
+  <div class="grade">Baho: {grade}</div>
+  <div class="btns">
+    <button class="btn btn-r" onclick="location.href='/r/{token}'">📖 Ko'rish</button>
+    <button class="btn btn-c" onclick="try{{Telegram.WebApp.close()}}catch(e){{}}">✓ Yopish</button>
+  </div>
+</div>
+<script>
+{_STAR_JS}
+try{{Telegram.WebApp.ready();Telegram.WebApp.expand();}}catch(e){{}}
+if({pct}>=50){{
+  try{{
+    const c=new JSConfetti();
+    c.addConfetti({{confettiColors:{json.dumps(["#f59e0b","#6c63ff","#a855f7","#ffffff"] if pct>=90 else ["#6c63ff","#a855f7","#10b981"])},confettiNumber:{400 if pct>=90 else 180}}});
+  }}catch(e){{}}
+}}
+</script>
+</body></html>"""
+
+
+# ─────────────────────────────────────────────
+#  REVIEW PAGE  /r/{token}
+# ─────────────────────────────────────────────
 @app.get("/r/{token}", response_class=HTMLResponse)
 def review_page(token: str):
     s = db.get_session_by_token(token)
     if not s:
-        return HTMLResponse("<h3>Topilmadi.</h3>", status_code=404)
+        return HTMLResponse(_error_page("Topilmadi."), status_code=404)
     if s["status"] != "finished":
-        return HTMLResponse("<h3>Avval testni yakunlang.</h3>", status_code=403)
+        return HTMLResponse(_error_page("Avval testni yakunlang."), status_code=403)
+
     live = s["live"]
-    letters = ["A", "B", "C", "D", "E", "F", "G", "H"]
-    cards = []
+    letters = ["A","B","C","D","E","F","G","H"]
+    cards_html = []
+    sc = s["score"]; tot = s["total"]
+
     for i, item in enumerate(s["order"]):
         q = db.get_question(item["qid"])
         chosen = live.get(str(i))
         chosen = int(chosen) if chosen is not None else None
         correct = item["correct"]
         ok = (chosen == correct)
+        card_cls = "card-ok" if ok else "card-err"
+
         opts_html = ""
         for k, orig in enumerate(item["opt"]):
+            o_html = _opt_html(q, orig)
             cls = ""
-            tag = ""
+            mark = ""
             if k == correct:
-                cls = "correct"; tag = '<span class="tag tg">✓ to\'g\'ri</span>'
-            if chosen is not None and k == chosen and k != correct:
-                cls = "wrong"; tag = '<span class="tag tw">✗ siz</span>'
-            elif chosen is not None and k == chosen and k == correct:
-                tag = '<span class="tag tg">✓ siz</span>'
-            opts_html += (f'<div class="opt {cls}"><span class="lbl">{letters[k]}</span>'
-                          f'<span class="otext">{_opt_html(q, orig)}</span>{tag}</div>')
-        mark = "✅" if ok else ("❌" if chosen is not None else "⬜")
-        cards.append(f'<div class="card"><div class="qhead">{mark} {i+1}-savol</div>'
-                     f'<div class="stem">{_q_html(q)}</div><div class="opts">{opts_html}</div></div>')
-    score = s["score"]; total = s["total"]; pct = round(100*score/total) if total else 0
-    return HTMLResponse(f"""<!DOCTYPE html><html lang="uz"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
-<title>Javoblar</title>
+                cls = "opt-correct"; mark = " ✅"
+            if k == chosen and k != correct:
+                cls = "opt-wrong"; mark = " ❌"
+            opts_html += f'<div class="rev-opt {cls}"><span class="opt-lbl">{letters[k]}</span><span class="otext">{o_html}{mark}</span></div>'
+
+        cards_html.append(f"""
+<div class="rev-card {card_cls}">
+  <div class="rev-qnum">
+    <span class="qnum-badge">{i+1}</span>
+    {"<span class='badge-ok'>✓</span>" if ok else "<span class='badge-err'>✗</span>"}
+  </div>
+  <div class="stem rev-stem">{_q_html(q)}</div>
+  <div class="rev-opts">{opts_html}</div>
+</div>""")
+
+    pct = round(100*sc/tot) if tot else 0
+    name = html.escape(s.get("student_name") or "")
+
+    return HTMLResponse(f"""<!DOCTYPE html>
+<html lang="uz"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<title>Javoblar ko'rish</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
-<script>window.MathJax={{startup:{{typeset:true}}}};</script>
-<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/mml-chtml.js" async></script>
+<script>window.MathJax={{tex:{{}},options:{{}},startup:{{typeset:false}}}};</script>
+<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/mml-chtml.js" id="MathJax-script" async></script>
 <style>
-body{{font-family:-apple-system,Segoe UI,Roboto,sans-serif;background:#f1f5f9;margin:0;padding:12px 12px 30px;color:#1e293b}}
-.top{{position:sticky;top:0;background:#fff;border-radius:14px;padding:14px 16px;margin-bottom:12px;
-  box-shadow:0 2px 10px rgba(0,0,0,.06);text-align:center}}
-.top .sc{{font-size:22px;font-weight:800;color:#2563eb}}
-.card{{background:#fff;border-radius:14px;padding:16px;margin-bottom:12px;box-shadow:0 2px 8px rgba(0,0,0,.05)}}
-.qhead{{font-size:13px;font-weight:700;color:#475569;margin-bottom:8px}}
-.stem{{font-size:17px;margin-bottom:12px;line-height:1.5}}
-.opts{{display:flex;flex-direction:column;gap:7px}}
-.opt{{display:flex;align-items:center;gap:10px;background:#f8fafc;border:2px solid #e2e8f0;
-  border-radius:10px;padding:10px 12px;font-size:16px;position:relative}}
-.opt .lbl{{flex:0 0 28px;height:28px;border-radius:50%;background:#e2e8f0;display:flex;
-  align-items:center;justify-content:center;font-weight:700;font-size:13px}}
-.opt.correct{{border-color:#16a34a;background:#f0fdf4}}
-.opt.correct .lbl{{background:#16a34a;color:#fff}}
-.opt.wrong{{border-color:#dc2626;background:#fef2f2}}
-.opt.wrong .lbl{{background:#dc2626;color:#fff}}
-.tag{{margin-left:auto;font-size:11px;font-weight:700;padding:2px 8px;border-radius:20px;white-space:nowrap}}
-.tag.tg{{background:#16a34a;color:#fff}} .tag.tw{{background:#dc2626;color:#fff}}
-.stem math{{font-size:1.1em}} .otext math{{font-size:1.05em}}
-.btn{{display:block;width:100%;max-width:480px;margin:10px auto;background:#2563eb;color:#fff;border:none;
-  padding:14px;border-radius:12px;font-size:16px;font-weight:700;cursor:pointer}}
-</style></head><body>
-<div class="top"><div class="sc">{score} / {total} ({pct}%)</div>
-<div style="color:#64748b;font-size:13px">🟢 to'g'ri javob · 🔴 sizning xato tanlovingiz</div></div>
-{''.join(cards)}
-<button class="btn" onclick="try{{Telegram.WebApp.close()}}catch(e){{location.href='about:blank'}}">Yopish</button>
-<script>try{{Telegram.WebApp.ready();Telegram.WebApp.expand();}}catch(e){{}}</script>
+{_BASE_STYLE}
+.header {{
+  position:sticky; top:0; z-index:50;
+  background:rgba(10,10,26,.92); backdrop-filter:blur(20px);
+  border-bottom:1px solid var(--glass-border);
+  padding:14px 16px; display:flex; align-items:center; justify-content:space-between;
+}}
+.hname {{ font-size:14px; font-weight:700; }}
+.hscore {{
+  font-size:13px; font-weight:800; padding:5px 14px; border-radius:99px;
+  background:linear-gradient(135deg,var(--neon),var(--neon2));
+}}
+.rev-wrap {{ padding:14px 14px 30px; display:flex; flex-direction:column; gap:12px; }}
+.rev-card {{
+  background:var(--glass); border:1px solid var(--glass-border);
+  backdrop-filter:blur(12px); border-radius:var(--card-r); padding:16px;
+}}
+.card-ok {{ border-color:rgba(16,185,129,.35); background:rgba(16,185,129,.06); }}
+.card-err {{ border-color:rgba(239,68,68,.35); background:rgba(239,68,68,.06); }}
+.rev-qnum {{ display:flex; align-items:center; gap:8px; margin-bottom:12px; }}
+.qnum-badge {{ background:linear-gradient(135deg,var(--neon),var(--neon2)); color:white; border-radius:6px; padding:2px 8px; font-size:11px; font-weight:800; }}
+.badge-ok {{ color:var(--green); font-size:15px; font-weight:800; }}
+.badge-err {{ color:var(--red); font-size:15px; font-weight:800; }}
+.rev-stem {{ font-size:16px; line-height:1.55; margin-bottom:14px; }}
+.rev-opts {{ display:flex; flex-direction:column; gap:8px; }}
+.rev-opt {{
+  display:flex; align-items:center; gap:10px;
+  padding:11px 12px; border-radius:11px; font-size:14px;
+  background:rgba(255,255,255,.04); border:1.5px solid rgba(255,255,255,.08);
+}}
+.opt-correct {{ background:rgba(16,185,129,.12); border-color:rgba(16,185,129,.4); color:#6ee7b7; }}
+.opt-wrong {{ background:rgba(239,68,68,.12); border-color:rgba(239,68,68,.4); color:#fca5a5; }}
+.opt-lbl {{ flex-shrink:0; width:30px; height:30px; border-radius:8px; border:1.5px solid rgba(255,255,255,.15); display:flex; align-items:center; justify-content:center; font-weight:800; font-size:13px; }}
+.opt-correct .opt-lbl {{ background:rgba(16,185,129,.3); border-color:var(--green); }}
+.opt-wrong .opt-lbl {{ background:rgba(239,68,68,.3); border-color:var(--red); }}
+.otext {{ flex:1; }}
+</style>
+</head><body>
+<div class="header">
+  <span class="hname">📖 {name}</span>
+  <span class="hscore">{sc}/{tot} · {pct}%</span>
+</div>
+<div class="rev-wrap">{''.join(cards_html)}</div>
+<script>
+try{{Telegram.WebApp.ready();Telegram.WebApp.expand();}}catch(e){{}}
+if(window.MathJax) MathJax.typesetPromise().catch(()=>{{}});
+</script>
 </body></html>""")
 
 
-# ============ API ============
+# ─────────────────────────────────────────────
+#  API ENDPOINTS
+# ─────────────────────────────────────────────
 @app.post("/api/answer")
 async def api_answer(req: Request):
     d = await req.json()
-    db.save_live(d.get("token", ""), int(d.get("i")), int(d.get("pos")))
+    db.save_live(d["token"], d["i"], d["pos"])
     return JSONResponse({"ok": True})
 
 @app.post("/api/submit")
 async def api_submit(req: Request):
     d = await req.json()
-    res = db.submit_session(d.get("token", ""), d.get("answers"))
-    if not res:
+    result = db.submit_session(d["token"], d.get("answers"))
+    return JSONResponse(result or {"error": "not found"})
+
+@app.get("/api/panel/{code}")
+def api_panel(code: str, t: str = ""):
+    data = db.panel_data(code)
+    if not data:
         return JSONResponse({"error": "not found"}, status_code=404)
-    return JSONResponse(res)
+    return JSONResponse(data)
+
+@app.post("/api/expire")
+async def api_expire():
+    n = db.expire_due()
+    return JSONResponse({"expired": n})
 
 
-def _result_page(token):
-    s = db.get_session_by_token(token)
-    res = db.finalized_result(s)
-    pct = round(100 * res["score"] / res["total"]) if res["total"] else 0
-    wrong = ", ".join(str(d["i"] + 1) for d in res["detail"] if not d["ok"]) or "yo'q"
-    return f"""<!DOCTYPE html><html><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+# ─────────────────────────────────────────────
+#  TEACHER PANEL  /p/{code}/{panel_token}
+# ─────────────────────────────────────────────
+@app.get("/p/{code}/{panel_token}", response_class=HTMLResponse)
+def panel_page(code: str, panel_token: str):
+    test = db.get_test(code)
+    if not test or test.get("panel_token") != panel_token:
+        return HTMLResponse(_error_page("Panel topilmadi yoki token noto'g'ri."), status_code=404)
+    return HTMLResponse(_panel_html(code, panel_token))
+
+
+def _panel_html(code, panel_token):
+    return f"""<!DOCTYPE html>
+<html lang="uz"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<title>Panel — {code}</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
-<style>body{{font-family:sans-serif;background:#f1f5f9;text-align:center;padding:40px 20px}}
-.b{{background:#fff;border-radius:18px;padding:30px;max-width:420px;margin:auto;box-shadow:0 4px 20px rgba(0,0,0,.1)}}
-.sc{{font-size:30px;font-weight:800;color:#2563eb;margin:10px 0}}</style></head>
-<body><div class="b"><h2>✅ Test allaqachon yakunlangan</h2>
-<div class="sc">{res['score']} / {res['total']} ({pct}%)</div>
-<div style="color:#475569">❌ Xato savollar: {wrong}</div>
-<a href="/r/{token}" style="display:inline-block;margin-top:16px;background:#16a34a;color:#fff;
-  text-decoration:none;padding:12px 22px;border-radius:10px;font-weight:700">📖 Javoblarni ko'rish</a></div>
-<script>try{{Telegram.WebApp.ready();Telegram.WebApp.expand();}}catch(e){{}}</script></body></html>"""
-
-
-# ============ O'QITUVCHI PANELI ============
-@app.get("/p/{code}/{ptoken}", response_class=HTMLResponse)
-def panel_page(code: str, ptoken: str):
-    import os as _os
-    t = db.get_test(code)
-    if not t or t["panel_token"] != ptoken:
-        return HTMLResponse("<h3>Panel topilmadi.</h3>", status_code=404)
-    username = _os.environ.get("BOT_USERNAME", "")
-    student_link = f"https://t.me/{username}?start={code}" if username else ""
-    return HTMLResponse(_panel_html(code, ptoken, student_link))
-
-@app.get("/api/panel/{code}/{ptoken}")
-def api_panel(code: str, ptoken: str):
-    t = db.get_test(code)
-    if not t or t["panel_token"] != ptoken:
-        return JSONResponse({"error": "no"}, status_code=404)
-    db.expire_due()
-    return JSONResponse(db.panel_data(code))
-
-
-def _panel_html(code, ptoken, student_link=""):
-    qr_block = ""
-    if student_link:
-        qr_block = f"""
-<div class="qrbox">
-  <div id="qr"></div>
-  <div class="qrinfo">
-    <div class="qrcode">🔑 Kod: <b>{code}</b></div>
-    <div class="qrhint">O'quvchilar QR-kodni telefon kamerasi bilan skanerlasin<br>yoki havoladan kirsin:</div>
-    <a class="qrlink" href="{student_link}" target="_blank">{student_link}</a>
-    <button class="qrbtn" onclick="toggleBig()">🔍 Kattalashtirish (proyektor uchun)</button>
-  </div>
-</div>
-<div id="qrbig" onclick="toggleBig()"><div id="qrbigInner"><div id="qrbigCode"></div></div></div>
-<script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
-<script>
-const LINK="{student_link}";
-function makeQR(el,size){{ el.innerHTML=""; new QRCode(el,{{text:LINK,width:size,height:size,correctLevel:QRCode.CorrectLevel.M}}); }}
-window.addEventListener('load',()=>{{ try{{makeQR(document.getElementById('qr'),150);}}catch(e){{}} }});
-function toggleBig(){{
-  const b=document.getElementById('qrbig');
-  if(b.style.display==='flex'){{b.style.display='none';return;}}
-  const inner=document.getElementById('qrbigCode');
-  makeQR(inner,Math.min(window.innerWidth,window.innerHeight)*0.75);
-  b.style.display='flex';
-}}
-</script>"""
-    return f"""<!DOCTYPE html><html lang="uz"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Panel {code}</title>
 <style>
-body{{font-family:-apple-system,Segoe UI,Roboto,sans-serif;background:#0f172a;color:#e2e8f0;margin:0;padding:16px}}
-h2{{margin:0 0 4px}} .sub{{color:#94a3b8;font-size:13px;margin-bottom:16px}}
-.qrbox{{display:flex;gap:16px;align-items:center;background:#1e293b;border-radius:14px;padding:16px;margin-bottom:16px;flex-wrap:wrap}}
-#qr{{background:#fff;padding:8px;border-radius:8px;flex:0 0 auto}}
-#qr img{{display:block}}
-.qrinfo{{flex:1;min-width:200px}}
-.qrcode{{font-size:20px;margin-bottom:6px}} .qrcode b{{color:#38bdf8;letter-spacing:1px}}
-.qrhint{{font-size:12px;color:#94a3b8;margin-bottom:6px}}
-.qrlink{{color:#38bdf8;font-size:13px;word-break:break-all;text-decoration:none}}
-.qrbtn{{display:block;margin-top:10px;background:#2563eb;color:#fff;border:none;padding:9px 14px;
-  border-radius:8px;font-weight:700;font-size:13px;cursor:pointer}}
-#qrbig{{display:none;position:fixed;inset:0;background:rgba(255,255,255,.98);z-index:200;
-  align-items:center;justify-content:center;cursor:pointer;flex-direction:column}}
-#qrbigInner{{text-align:center}} #qrbigCode{{background:#fff}}
-.stats{{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px}}
-.stat{{background:#1e293b;border-radius:12px;padding:12px 16px;flex:1;min-width:120px}}
-.stat .v{{font-size:22px;font-weight:800;color:#38bdf8}} .stat .l{{font-size:12px;color:#94a3b8}}
-table{{width:100%;border-collapse:collapse;background:#1e293b;border-radius:12px;overflow:hidden}}
-th,td{{padding:10px 12px;text-align:left;font-size:14px;border-bottom:1px solid #334155}}
-th{{background:#334155;font-size:12px;text-transform:uppercase;color:#cbd5e1}}
-.badge{{padding:2px 8px;border-radius:20px;font-size:11px;font-weight:700}}
-.b-fin{{background:#166534;color:#bbf7d0}} .b-act{{background:#854d0e;color:#fde68a}}
-.upd{{color:#64748b;font-size:11px;margin-top:10px}}
-.racebtn{{display:block;width:100%;background:linear-gradient(90deg,#7c3aed,#2563eb);color:#fff;border:none;
-  padding:14px;border-radius:12px;font-size:16px;font-weight:800;cursor:pointer;margin-bottom:16px;
-  box-shadow:0 4px 14px rgba(124,58,237,.4)}}
-/* ===== Poyga (Mentimeter uslubi) ===== */
-#race{{display:none;position:fixed;inset:0;z-index:300;background:radial-gradient(circle at 50% 0%,#1e2a52,#0b1220);
-  color:#fff;flex-direction:column;padding:18px 26px;overflow:hidden}}
-#race .rhead{{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}}
-#race .rhead .t{{font-size:30px;font-weight:900;letter-spacing:.5px}}
-#race .rhead .btns{{display:flex;gap:8px}}
-#race .rbtn{{background:rgba(255,255,255,.12);color:#fff;border:none;border-radius:10px;padding:9px 15px;
-  font-weight:700;cursor:pointer;font-size:15px}}
-#race .rbtn:hover{{background:rgba(255,255,255,.22)}}
-#race .fin{{font-size:17px;color:#a5b4fc;font-weight:700;margin-bottom:14px}}
-#lanes{{flex:1;position:relative;margin-top:4px}}
-.row{{position:absolute;left:0;right:0;height:56px;display:flex;align-items:center;gap:14px;
-  transition:transform .8s cubic-bezier(.4,0,.2,1);will-change:transform}}
-.rank{{flex:0 0 40px;text-align:center;font-size:22px;font-weight:900;color:#64748b}}
-.bar-wrap{{flex:1;position:relative;height:42px}}
-.bar{{position:absolute;left:0;top:0;height:100%;border-radius:10px;min-width:42px;
-  transition:width .8s cubic-bezier(.4,0,.2,1);display:flex;align-items:center;justify-content:flex-end}}
-.bar .av{{width:46px;height:46px;border-radius:50%;background:#fff;display:flex;align-items:center;
-  justify-content:center;font-size:26px;box-shadow:0 3px 8px rgba(0,0,0,.35);margin-right:-6px;
-  position:absolute;right:-6px;top:50%;transform:translateY(-50%);border:3px solid rgba(255,255,255,.5)}}
-.pts{{flex:0 0 auto;font-size:20px;font-weight:900;min-width:56px;color:#fde047}}
-/* katta rejim */
-#race.big .rhead .t{{font-size:44px}} #race.big .row{{height:74px}} #race.big .bar-wrap{{height:56px}}
-#race.big .bar .av{{width:60px;height:60px;font-size:34px}} #race.big .pts{{font-size:28px}}
-#race.big .rank{{font-size:30px}}
-/* Podium (Kahoot uslubi) */
-#podium{{display:none;position:fixed;inset:0;z-index:310;background:radial-gradient(circle at 50% 20%,#3b2a72,#0b1220);
-  color:#fff;flex-direction:column;align-items:center;padding:26px 18px;overflow:auto}}
-#podium h1{{font-size:38px;margin:6px 0 26px;font-weight:900;text-shadow:0 3px 12px rgba(0,0,0,.4)}}
-.pods{{display:flex;align-items:flex-end;gap:20px;justify-content:center;flex-wrap:nowrap}}
-.pod{{display:flex;flex-direction:column;align-items:center}}
-.pod .pav{{width:76px;height:76px;border-radius:50%;background:#fff;display:flex;align-items:center;
-  justify-content:center;font-size:44px;margin-bottom:8px;box-shadow:0 4px 14px rgba(0,0,0,.4)}}
-.pod .pname{{font-size:19px;font-weight:800;margin-bottom:8px}}
-.pod .stand{{width:120px;border-radius:14px 14px 0 0;display:flex;flex-direction:column;
-  align-items:center;justify-content:flex-start;padding-top:12px;color:#0b1220;font-weight:900}}
-.pod .medal{{font-size:38px}} .pod .ps{{font-size:20px;margin-top:2px}}
-.stand.s1{{height:200px;background:linear-gradient(#fde047,#f59e0b)}}
-.stand.s2{{height:150px;background:linear-gradient(#e5e7eb,#94a3b8)}}
-.stand.s3{{height:115px;background:linear-gradient(#fdba74,#d97706)}}
-.runners{{margin-top:26px;width:100%;max-width:520px}}
-.runners .rt{{text-align:center;color:#a5b4fc;font-weight:800;margin-bottom:10px;font-size:15px}}
-.runrow{{display:flex;align-items:center;gap:12px;background:rgba(255,255,255,.08);border-radius:12px;
-  padding:9px 14px;margin-bottom:7px}}
-.runrow .rr{{font-weight:900;color:#94a3b8;min-width:26px}}
-.runrow .ra{{font-size:22px}} .runrow .rn{{flex:1;font-weight:700}} .runrow .rp{{font-weight:900;color:#fde047}}
-#podium .pclose{{margin-top:24px;background:rgba(255,255,255,.15);color:#fff;border:none;border-radius:12px;
-  padding:13px 26px;font-weight:800;cursor:pointer;font-size:15px}}
-</style></head><body>
-<h2>📊 {code} — jonli natijalar</h2>
-<div class="sub" id="sub">yuklanmoqda…</div>
-{qr_block}
-<div class="stats" id="stats"></div>
-<button class="racebtn" onclick="openRace()">🏁 Poyga rejimi (proyektor uchun)</button>
-<div id="tbl"></div>
-<div class="upd" id="upd"></div>
+{_BASE_STYLE}
 
-<div id="race">
-  <div class="rhead">
-    <div class="t">🏁 Poyga</div>
-    <div class="btns">
-      <button class="rbtn" onclick="toggleBig2()">⛶ Katta rejim</button>
-      <button class="rbtn" onclick="revealPodium()">🏆 Natija</button>
-      <button class="rbtn" onclick="closeRace()">✕</button>
-    </div>
-  </div>
-  <div class="fin" id="rfin">0/0 yakunladi</div>
-  <div id="lanes"></div>
-</div>
-<div id="podium">
-  <h1>🎉 G'oliblar!</h1>
-  <div class="pods" id="pods"></div>
-  <div class="runners" id="runners"></div>
-  <button class="pclose" onclick="document.getElementById('podium').style.display='none'">✕ Yopish</button>
-</div>
-<script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.3/dist/confetti.browser.min.js"></script>
+/* ── HEADER ── */
+.panel-header {{
+  background:rgba(10,10,26,.92); backdrop-filter:blur(20px);
+  border-bottom:1px solid var(--glass-border);
+  padding:14px 16px;
+  display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px;
+}}
+.panel-title {{ font-size:17px; font-weight:800; }}
+.panel-code {{ font-size:13px; color:var(--muted); }}
+.live-badge {{
+  display:flex; align-items:center; gap:6px;
+  background:rgba(239,68,68,.15); border:1px solid rgba(239,68,68,.3);
+  border-radius:99px; padding:5px 12px; font-size:12px; font-weight:700; color:#fca5a5;
+}}
+.live-dot {{
+  width:8px; height:8px; border-radius:50%; background:#ef4444;
+  animation:blink 1s infinite;
+}}
+@keyframes blink {{ 0%,100%{{opacity:1}} 50%{{opacity:0.2}} }}
+
+/* ── STAT CARDS ── */
+.stats-row {{
+  display:grid; grid-template-columns:repeat(3,1fr); gap:10px;
+  padding:14px 14px 0;
+}}
+.stat-card {{
+  background:var(--glass); border:1px solid var(--glass-border);
+  backdrop-filter:blur(12px); border-radius:14px; padding:14px 12px; text-align:center;
+}}
+.stat-num {{ font-size:26px; font-weight:900; }}
+.stat-num.gold {{ background:linear-gradient(135deg,#f59e0b,#fbbf24); -webkit-background-clip:text; -webkit-text-fill-color:transparent; }}
+.stat-num.purple {{ background:linear-gradient(135deg,var(--neon),var(--neon2)); -webkit-background-clip:text; -webkit-text-fill-color:transparent; }}
+.stat-num.green {{ background:linear-gradient(135deg,#10b981,#34d399); -webkit-background-clip:text; -webkit-text-fill-color:transparent; }}
+.stat-lbl {{ font-size:11px; color:var(--muted); font-weight:600; margin-top:4px; }}
+
+/* ── PODIUM ── */
+.podium-wrap {{
+  padding:16px 14px 0;
+}}
+.podium-title {{ font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:1px; color:var(--muted); margin-bottom:12px; }}
+.podium {{
+  display:flex; align-items:flex-end; justify-content:center; gap:8px; height:120px;
+}}
+.podium-item {{
+  flex:1; display:flex; flex-direction:column; align-items:center; justify-content:flex-end;
+  max-width:110px;
+}}
+.podium-av {{ font-size:22px; margin-bottom:4px; }}
+.podium-name {{ font-size:11px; font-weight:700; color:var(--text); text-align:center; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; width:100%; padding:0 2px; }}
+.podium-score {{ font-size:12px; color:var(--muted); font-weight:600; }}
+.podium-bar {{
+  width:100%; border-radius:8px 8px 0 0; margin-top:6px;
+  display:flex; align-items:center; justify-content:center;
+  font-size:18px; font-weight:900;
+}}
+.podium-bar.gold {{ background:linear-gradient(180deg,#f59e0b,#d97706); height:80px; }}
+.podium-bar.silver {{ background:linear-gradient(180deg,#94a3b8,#64748b); height:60px; }}
+.podium-bar.bronze {{ background:linear-gradient(180deg,#cd7c2f,#92400e); height:44px; }}
+
+/* ── RACE LIST ── */
+.race-wrap {{ padding:14px; display:flex; flex-direction:column; gap:8px; padding-bottom:30px; }}
+.race-item {{
+  background:var(--glass); border:1px solid var(--glass-border);
+  backdrop-filter:blur(10px); border-radius:14px; padding:12px 14px;
+  transition:all 0.4s ease;
+}}
+.race-top {{ display:flex; align-items:center; gap:10px; margin-bottom:8px; }}
+.race-rank {{ font-size:13px; font-weight:800; width:24px; color:var(--muted); text-align:center; }}
+.race-av {{ font-size:20px; }}
+.race-name {{ flex:1; font-size:14px; font-weight:700; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }}
+.race-status-active {{ font-size:11px; color:#34d399; font-weight:700; animation:blink 1.5s infinite; }}
+.race-status-done {{ font-size:11px; color:var(--muted); font-weight:600; }}
+.race-score {{ font-size:14px; font-weight:800; }}
+.race-bar-bg {{ height:6px; background:rgba(255,255,255,.08); border-radius:99px; overflow:hidden; }}
+.race-bar-fill {{ height:100%; border-radius:99px; transition:width 0.6s cubic-bezier(.4,0,.2,1); }}
+.fill-active {{ background:linear-gradient(90deg,var(--neon),var(--neon2)); }}
+.fill-done {{ background:linear-gradient(90deg,#10b981,#34d399); }}
+.fill-waiting {{ background:rgba(255,255,255,.2); }}
+.race-meta {{ display:flex; justify-content:space-between; margin-top:5px; font-size:11px; color:var(--muted); font-weight:600; }}
+
+/* ── HARDEST Q card ── */
+.hardest-wrap {{ padding:0 14px 14px; }}
+.hardest-card {{
+  background:rgba(239,68,68,.08); border:1px solid rgba(239,68,68,.2);
+  border-radius:14px; padding:14px; display:flex; align-items:center; gap:12px;
+}}
+.hardest-icon {{ font-size:28px; }}
+.hardest-txt .label {{ font-size:11px; color:#fca5a5; font-weight:700; text-transform:uppercase; letter-spacing:.5px; }}
+.hardest-txt .val {{ font-size:16px; font-weight:800; }}
+
+/* ── CLOSED BANNER ── */
+.closed-banner {{
+  background:rgba(239,68,68,.12); border:1px solid rgba(239,68,68,.25);
+  border-radius:12px; padding:10px 14px; margin:12px 14px 0;
+  font-size:13px; font-weight:700; color:#fca5a5; text-align:center;
+}}
+
+/* ── REFRESH indicator ── */
+.refresh-bar {{
+  position:fixed; bottom:0; left:0; right:0; height:3px;
+  background:rgba(255,255,255,.05);
+}}
+.refresh-fill {{
+  height:100%; background:linear-gradient(90deg,var(--neon),var(--neon2));
+  width:100%; transform-origin:left; animation:progress 3s linear infinite;
+}}
+@keyframes progress {{ from{{transform:scaleX(0)}} to{{transform:scaleX(1)}} }}
+</style>
+</head><body>
+
+<div id="app"></div>
+<div class="refresh-bar"><div class="refresh-fill"></div></div>
+
 <script>
-const CODE="{code}",PT="{ptoken}";
-function esc(s){{return (s||'').replace(/</g,'&lt;')}}
-async function load(){{
-  try{{
-    const r=await fetch('/api/panel/'+CODE+'/'+PT); const d=await r.json();
-    document.getElementById('sub').textContent=d.title+' · vaqt: '+d.time_limit+' daqiqa'+(d.closed?' · 🔒 yopiq':'');
-    const hardest=d.hardest?('#'+d.hardest.q+' ('+d.hardest.miss_pct+'% xato)'):'—';
-    document.getElementById('stats').innerHTML=
-      stat(d.finished+'/'+d.total_students,'Yakunladi')+
-      stat(d.avg,"O'rtacha ball")+
-      stat(hardest,'Eng qiyin savol');
-    let rows=d.students.map(s=>{{
-      const st=s.status==='finished'
-        ?'<span class="badge b-fin">yakunladi</span>'
-        :'<span class="badge b-act">yechyapti ('+s.answered+')</span>';
-      const sc=s.status==='finished'?(s.score+'/'+s.total):'—';
-      const tm=s.spent!=null?(Math.floor(s.spent/60)+'m '+(s.spent%60)+'s'):'—';
-      return '<tr><td>'+esc(s.name)+'</td><td>'+st+'</td><td>'+sc+'</td><td>'+tm+'</td></tr>';
-    }}).join('');
-    if(!rows)rows='<tr><td colspan=4 style="color:#64748b">Hali hech kim kirmadi</td></tr>';
-    document.getElementById('tbl').innerHTML=
-      '<table><tr><th>O\\'quvchi</th><th>Holat</th><th>Ball</th><th>Vaqt</th></tr>'+rows+'</table>';
-    document.getElementById('upd').textContent='yangilandi: '+new Date().toLocaleTimeString();
-    window.__last=d; if(window.raceOn) renderRace(d);
-  }}catch(e){{}}
-}}
-function stat(v,l){{return '<div class="stat"><div class="v">'+v+'</div><div class="l">'+l+'</div></div>';}}
+{_STAR_JS}
+try{{Telegram.WebApp.ready();Telegram.WebApp.expand();}}catch(e){{}}
 
-// ===== Poyga (Mentimeter/Kahoot uslubi) =====
-window.raceOn=false; window.podiumShown=false;
-const BAR_COLORS=['#ec4899','#3b82f6','#22c55e','#f59e0b','#8b5cf6','#ef4444','#14b8a6','#eab308',
-  '#f97316','#06b6d4','#a855f7','#84cc16','#e11d48','#0ea5e9','#10b981','#d946ef'];
-let sid2color={{}};
-function assignColor(id,idx){{ if(!(id in sid2color)) sid2color[id]=BAR_COLORS[Object.keys(sid2color).length%BAR_COLORS.length]; return sid2color[id]; }}
+const CODE = "{code}";
 
-function openRace(){{
-  window.raceOn=true; window.podiumShown=false;
-  document.getElementById('lanes').innerHTML='';
-  document.getElementById('race').style.display='flex';
-  if(window.__last) renderRace(window.__last);
-  load();
-}}
-function closeRace(){{ window.raceOn=false; document.getElementById('race').style.display='none'; }}
-function toggleBig2(){{
-  const r=document.getElementById('race'); r.classList.toggle('big');
-  try{{ if(!document.fullscreenElement) r.requestFullscreen(); else document.exitFullscreen(); }}catch(e){{}}
+function fmtTime(s) {{
+  if(s===null||s===undefined) return '';
+  const m=Math.floor(s/60),x=s%60;
+  return m+'daq '+x+'s';
 }}
 
-function renderRace(d){{
-  const studs=(d.students||[]).slice();
-  const maxC=Math.max(1, ...studs.map(s=>s.correct||0), Math.ceil((d.q_total||1)*0.3));
-  document.getElementById('rfin').textContent='🏁 '+d.finished+'/'+d.total_students+' yakunladi';
-  // tartiblаsh: ball bo'yicha (jonli)
-  studs.forEach((s,i)=>{{ s._id=s.name+'#'+i; }});
-  const sorted=[...studs].sort((a,b)=> (b.correct||0)-(a.correct||0) || (a.answered-b.answered));
-  const lanes=document.getElementById('lanes');
-  const rowH = document.getElementById('race').classList.contains('big')?74:56;
+function render(data) {{
+  const st = data.students || [];
+  const finished = st.filter(s=>s.status==='finished');
+  const active = st.filter(s=>s.status==='active');
+  const qTotal = data.q_total || 1;
 
-  sorted.forEach((s,rank)=>{{
-    const id=cssId(s._id);
-    let row=document.getElementById('row_'+id);
-    if(!row){{
-      row=document.createElement('div'); row.className='row'; row.id='row_'+id;
-      const col=assignColor(s._id);
-      row.innerHTML='<div class="rank" id="rk_'+id+'"></div>'+
-        '<div class="bar-wrap"><div class="bar" id="bar_'+id+'" style="background:'+col+'">'+
-        '<div class="av">'+(s.avatar||'🐵')+'</div></div></div>'+
-        '<div class="pts" id="pt_'+id+'"></div>';
-      lanes.appendChild(row);
-    }}
-    row.style.transform='translateY('+(rank*rowH)+'px)';
-    document.getElementById('rk_'+id).textContent=(rank+1);
-    const frac=Math.min(1,(s.correct||0)/maxC);
-    document.getElementById('bar_'+id).style.width=(8+frac*92)+'%';
-    document.getElementById('pt_'+id).textContent=(s.correct||0);
+  // Sort by score desc, then by answered desc
+  const sorted = [...st].sort((a,b)=>{{
+    if(b.score!==a.score) return b.score-a.score;
+    return b.answered-a.answered;
   }});
-  lanes.style.height=(sorted.length*rowH+10)+'px';
 
-  if(d.total_students>0 && d.finished===d.total_students && !window.podiumShown){{
-    setTimeout(()=>revealPodium(),1000);
+  // PODIUM (top 3 finished)
+  const podiumPeople = sorted.filter(s=>s.status==='finished').slice(0,3);
+  let podiumHtml = '';
+  if(podiumPeople.length>=1) {{
+    const order = podiumPeople.length===1 ? [podiumPeople[0]] :
+                  podiumPeople.length===2 ? [podiumPeople[1],podiumPeople[0]] :
+                  [podiumPeople[1],podiumPeople[0],podiumPeople[2]];
+    const cls = podiumPeople.length===1 ? ['gold'] :
+                podiumPeople.length===2 ? ['silver','gold'] :
+                ['silver','gold','bronze'];
+    const medals = podiumPeople.length===1 ? ['🥇'] :
+                   podiumPeople.length===2 ? ['🥈','🥇'] :
+                   ['🥈','🥇','🥉'];
+    podiumHtml = `<div class="podium-wrap">
+      <div class="podium-title">🏆 Reyting</div>
+      <div class="podium">` +
+      order.map((p,i)=>`
+        <div class="podium-item">
+          <div class="podium-av">${{p.avatar||'🐵'}}</div>
+          <div class="podium-name">${{esc(p.name)}}</div>
+          <div class="podium-score">${{p.score}}/${{p.total}}</div>
+          <div class="podium-bar ${{cls[i]}}">${{medals[i]}}</div>
+        </div>`).join('') +
+      `</div></div>`;
   }}
-}}
-function cssId(name){{ return name.replace(/[^a-zA-Z0-9]/g,'_'); }}
 
-function revealPodium(){{
-  const d=window.__last; if(!d)return;
-  window.podiumShown=true;
-  const studs=[...(d.students||[])].sort((a,b)=> b.score-a.score || ((a.spent||1e9)-(b.spent||1e9)));
-  const top=studs.slice(0,3), rest=studs.slice(3);
-  const medals=['🥇','🥈','🥉']; const cls=['s1','s2','s3']; const orderIdx=[1,0,2];
-  const pods=document.getElementById('pods'); pods.innerHTML='';
-  orderIdx.forEach(i=>{{
-    if(!top[i])return; const s=top[i];
-    pods.innerHTML+='<div class="pod"><div class="pav">'+(s.avatar||'🐵')+'</div>'+
-      '<div class="pname">'+esc(s.name)+'</div>'+
-      '<div class="stand '+cls[i]+'"><div class="medal">'+medals[i]+'</div>'+
-      '<div class="ps">'+s.score+'/'+s.total+'</div></div></div>';
-  }});
-  const runners=document.getElementById('runners');
-  if(rest.length){{
-    runners.innerHTML='<div class="rt">Qolgan ishtirokchilar</div>'+rest.map((s,i)=>
-      '<div class="runrow"><span class="rr">'+(i+4)+'</span><span class="ra">'+(s.avatar||'🐵')+
-      '</span><span class="rn">'+esc(s.name)+'</span><span class="rp">'+s.score+'/'+s.total+'</span></div>'
-    ).join('');
-  }} else runners.innerHTML='';
-  document.getElementById('podium').style.display='flex';
-  fireConfetti();
-}}
-function fireConfetti(){{
-  try{{
-    const end=Date.now()+3000;
-    (function frame(){{
-      confetti({{particleCount:6,angle:60,spread:75,origin:{{x:0}},startVelocity:55}});
-      confetti({{particleCount:6,angle:120,spread:75,origin:{{x:1}},startVelocity:55}});
-      if(Date.now()<end)requestAnimationFrame(frame);
-    }})();
-  }}catch(e){{}}
+  // STATS
+  const statsHtml = `<div class="stats-row">
+    <div class="stat-card">
+      <div class="stat-num gold">${{data.avg||0}}</div>
+      <div class="stat-lbl">O'rtacha ball</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-num green">${{data.finished||0}}/${{data.total_students||0}}</div>
+      <div class="stat-lbl">Yakunladi</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-num purple">${{active.length}}</div>
+      <div class="stat-lbl">Yechyapti</div>
+    </div>
+  </div>`;
+
+  // HARDEST
+  let hardestHtml = '';
+  if(data.hardest) {{
+    hardestHtml = `<div class="hardest-wrap">
+      <div class="hardest-card">
+        <div class="hardest-icon">🔥</div>
+        <div class="hardest-txt">
+          <div class="label">Eng qiyin savol</div>
+          <div class="val">${{data.hardest.q}}-savol — ${{data.hardest.miss_pct}}% xato</div>
+        </div>
+      </div>
+    </div>`;
+  }}
+
+  // CLOSED
+  const closedHtml = data.closed ? `<div class="closed-banner">🔒 Test yopilgan — yangi o'quvchi kira olmaydi</div>` : '';
+
+  // RACE
+  const raceHtml = sorted.map((s,i)=>{{
+    const pct = s.total ? Math.round(100*s.answered/s.total) : 0;
+    const scorePct = s.total ? Math.round(100*s.score/s.total) : 0;
+    const fillCls = s.status==='finished' ? 'fill-done' : s.answered>0 ? 'fill-active' : 'fill-waiting';
+    const statusHtml = s.status==='finished'
+      ? `<span class="race-status-done">🏁 ${{fmtTime(s.spent)}}</span>`
+      : s.answered>0
+        ? `<span class="race-status-active">⏳ yechyapti…</span>`
+        : `<span class="race-status-done">⌛ kutmoqda</span>`;
+    const rankEmoji = i===0?'🥇':i===1?'🥈':i===2?'🥉':`${{i+1}}.`;
+    return `<div class="race-item">
+      <div class="race-top">
+        <span class="race-rank">${{rankEmoji}}</span>
+        <span class="race-av">${{s.avatar||'🐵'}}</span>
+        <span class="race-name">${{esc(s.name)}}</span>
+        ${{statusHtml}}
+        <span class="race-score">${{s.score||0}}/${{s.total||0}}</span>
+      </div>
+      <div class="race-bar-bg"><div class="race-bar-fill ${{fillCls}}" style="width:${{pct}}%"></div></div>
+      <div class="race-meta">
+        <span>${{s.answered}}/${{s.total}} javob (${{pct}}%)</span>
+        <span>${{scorePct}}% to'g'ri</span>
+      </div>
+    </div>`;
+  }}).join('');
+
+  document.getElementById('app').innerHTML = `
+    <div class="panel-header">
+      <div>
+        <div class="panel-title">${{esc(data.title||'')}}</div>
+        <div class="panel-code">Kod: ${{CODE}} · ${{data.q_total}} ta savol · ${{data.time_limit}} daq</div>
+      </div>
+      <div class="live-badge"><span class="live-dot"></span> LIVE ${{active.length}}</div>
+    </div>
+    ${{closedHtml}}
+    ${{statsHtml}}
+    ${{podiumHtml}}
+    ${{data.hardest?hardestHtml:''}}
+    <div class="race-wrap">${{raceHtml}}</div>
+  `;
 }}
 
-load(); setInterval(load,3000);
-</script></body></html>"""
+function esc(s) {{
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}}
+
+function load() {{
+  fetch('/api/panel/'+CODE)
+    .then(r=>r.json()).then(render).catch(()=>{{}});
+}}
+
+load();
+setInterval(load, 3000);
+</script>
+</body></html>"""
+
+
+# ─────────────────────────────────────────────
+#  ERROR PAGE
+# ─────────────────────────────────────────────
+def _error_page(msg):
+    return f"""<!DOCTYPE html>
+<html lang="uz"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+{_BASE_STYLE}
+body {{ display:flex; align-items:center; justify-content:center; min-height:100vh; padding:24px; text-align:center; }}
+.box {{ max-width:360px; }}
+.ico {{ font-size:56px; margin-bottom:16px; }}
+.msg {{ font-size:17px; font-weight:600; color:#94a3b8; }}
+</style></head><body>
+<div class="box">
+  <div class="ico">⚠️</div>
+  <div class="msg">{html.escape(msg)}</div>
+</div>
+</body></html>"""
