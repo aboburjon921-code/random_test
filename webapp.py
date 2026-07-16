@@ -391,7 +391,7 @@ const TOTAL = {total};
 // bilan qayta tiklanadi — savol matnidagi HECH QANDAY belgi bu qatorni
 // buzolmaydi (avvalgi "const CARDS = {{...}};" usuli savol ichida maxsus
 // belgi bo'lganda butun skriptni to'xtatib qo'yardi).
-const CARDS = JSON.parse(atob("{cards_b64}"));
+const CARDS = JSON.parse(decodeURIComponent(escape(atob("{cards_b64}"))));
 const CIRCUMFERENCE = 138.2;
 let REMAINING = {remaining};
 const FULL_TIME = {remaining};
@@ -517,7 +517,7 @@ function showResult(res) {{
   let emoji='📚', title='Harakat qiling!', grade='2';
   if(pct>=90) {{ emoji='🏆'; title='Ajoyib natija!'; grade='5'; }}
   else if(pct>=70) {{ emoji='🌟'; title='Yaxshi natija!'; grade='4'; }}
-  else if(pct>=50) {{ emoji='🙂'; title='O\'tdi!'; grade='3'; }}
+  else if(pct>=50) {{ emoji='🙂'; title="O‘tdi!"; grade='3'; }}
 
   document.getElementById('res-emoji').textContent = emoji;
   document.getElementById('res-title').textContent = title;
