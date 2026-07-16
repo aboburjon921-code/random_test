@@ -1,5 +1,5 @@
 """FastAPI web-server: premium dizayn — o'quvchi test oynasi va o'qituvchi paneli."""
-import time, html, json
+import time, html, json, base64
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
@@ -110,16 +110,24 @@ def student_page(token: str):
             "opts": opts
         })
 
-    # </ belgisini ekranlash — JS <script> tegini vaqtidan oldin yopmasin
-    cards_json = json.dumps(cards_data, ensure_ascii=False).replace('</', '<\\/')
+    # TUZATISH: JSON'ni to'g'ridan-to'g'ri JS kodi ichiga qo'yish xavfli edi —
+    # savol matnida (formula/rasm HTML'ida) uchraydigan </script, backtick,
+    # maxsus tirnoq va h.k. belgilar butun <script> blokini "sindirib"
+    # qo'yishi mumkin edi (aynan shu sabab oynada savollar chiqmay,
+    # taymer "--" holida qotib qolayotgan edi). Endi JSON base64'ga o'rab
+    # uzatiladi — base64 faqat A-Z/a-z/0-9/+//= belgilaridan iborat bo'lgani
+    # uchun HECH QANDAY belgi JS yoki HTML'ni buzolmaydi.
+    cards_b64 = base64.b64encode(
+        json.dumps(cards_data, ensure_ascii=False).encode("utf-8")
+    ).decode("ascii")
     total = len(s["order"])
     name = html.escape(s.get("student_name") or "O'quvchi")
     avatar = html.escape(s.get("avatar") or "🐵")
 
-    return HTMLResponse(_test_page_html(token, remaining, total, cards_json, name, avatar))
+    return HTMLResponse(_test_page_html(token, remaining, total, cards_b64, name, avatar))
 
 
-def _test_page_html(token, remaining, total, cards_json, name, avatar):
+def _test_page_html(token, remaining, total, cards_b64, name, avatar):
     return f"""<!DOCTYPE html>
 <html lang="uz">
 <head>
@@ -379,7 +387,11 @@ def _test_page_html(token, remaining, total, cards_json, name, avatar):
 {_STAR_JS}
 const TOKEN = "{token}";
 const TOTAL = {total};
-const CARDS = {cards_json};
+// TUZATISH: JSON endi base64 orqali xavfsiz uzatiladi va JSON.parse(atob(...))
+// bilan qayta tiklanadi — savol matnidagi HECH QANDAY belgi bu qatorni
+// buzolmaydi (avvalgi "const CARDS = {{...}};" usuli savol ichida maxsus
+// belgi bo'lganda butun skriptni to'xtatib qo'yardi).
+const CARDS = JSON.parse(atob("{cards_b64}"));
 const CIRCUMFERENCE = 138.2;
 let REMAINING = {remaining};
 const FULL_TIME = {remaining};
