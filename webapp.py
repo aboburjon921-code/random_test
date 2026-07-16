@@ -1,4 +1,4 @@
-
+"""FastAPI web-server: premium dizayn — o'quvchi test oynasi va o'qituvchi paneli."""
 import time, html, json
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -110,7 +110,8 @@ def student_page(token: str):
             "opts": opts
         })
 
-    cards_json = json.dumps(cards_data, ensure_ascii=False)
+    # </ belgisini ekranlash — JS <script> tegini vaqtidan oldin yopmasin
+    cards_json = json.dumps(cards_data, ensure_ascii=False).replace('</', '<\\/')
     total = len(s["order"])
     name = html.escape(s.get("student_name") or "O'quvchi")
     avatar = html.escape(s.get("avatar") or "🐵")
@@ -391,26 +392,25 @@ try {{ Telegram.WebApp.ready(); Telegram.WebApp.expand(); Telegram.WebApp.enable
 
 function buildCards() {{
   const wrap = document.getElementById('cards-wrap');
-  CARDS.forEach((cd, i) => {{
+  CARDS.forEach(function(cd, i) {{
     const div = document.createElement('div');
     div.className = 'card' + (i===0 ? ' active' : '');
     div.id = 'card' + i;
     let optsHtml = '';
-    cd.opts.forEach(o => {{
-      optsHtml += `<button class="opt" id="opt-${{i}}-${{o.k}}" data-q="${{i}}" data-k="${{o.k}}" onclick="pick(${{i}},${{o.k}},this)">
-        <span class="opt-lbl">${{o.letter}}</span>
-        <span class="otext">${{o.html}}</span>
-      </button>`;
+    cd.opts.forEach(function(o) {{
+      optsHtml += '<button class="opt" id="opt-' + i + '-' + o.k + '" data-q="' + i + '" data-k="' + o.k + '" onclick="pick(' + i + ',' + o.k + ',this)">' +
+        '<span class="opt-lbl">' + o.letter + '</span>' +
+        '<span class="otext">' + o.html + '</span>' +
+        '</button>';
     }});
-    div.innerHTML = `
-      <div class="qnum"><span class="qnum-badge">${{i+1}}</span> — ${{TOTAL}} ta savol</div>
-      <div class="stem">${{cd.stem}}</div>
-      <div class="opts">${{optsHtml}}</div>
-    `;
+    div.innerHTML =
+      '<div class="qnum"><span class="qnum-badge">' + (i+1) + '</span> \u2014 ' + TOTAL + ' ta savol</div>' +
+      '<div class="stem">' + cd.stem + '</div>' +
+      '<div class="opts">' + optsHtml + '</div>';
     wrap.appendChild(div);
   }});
   updateNav();
-  if(window.MathJax) MathJax.typesetPromise().catch(()=>{{}});
+  if(window.MathJax) MathJax.typesetPromise().catch(function(){{}});
 }}
 
 function pick(q, k, el) {{
