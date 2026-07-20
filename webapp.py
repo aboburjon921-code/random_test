@@ -1,4 +1,3 @@
-"""FastAPI web-server: premium dizayn — o'quvchi test oynasi va o'qituvchi paneli."""
 import time, html, json, base64
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -1318,6 +1317,7 @@ function render(d){
 
 function renderLobby(d,st){
   const url=CFG.joinurl;
+  const qrurl=CFG.joinurl+'?pin='+d.pin;
   const chips=(d.players||[]).map(p=>'<div class="chip"><span class="av">'+p.avatar+'</span>'+esc(p.name)+'</div>').join('');
   st.innerHTML=
    '<div class="pincard"><div><div class="lab">Qo\\'shilish uchun</div>'+
@@ -1325,7 +1325,7 @@ function renderLobby(d,st){
    '<div class="join">'+esc(url.replace(/^https?:\\/\\//,''))+'</div></div><div id="qr"></div></div>'+
    '<div class="cnt"><b>'+d.players_n+'</b> o\\'quvchi qo\\'shildi</div>'+
    '<div class="players">'+(chips||'<div class="empty">Birinchi o\\'quvchini kutmoqdamiz…</div>')+'</div>';
-  if(!qrDone){try{new QRCode(document.getElementById('qr'),{text:url,width:104,height:104,correctLevel:QRCode.CorrectLevel.M});qrDone=true;}catch(e){}}
+  if(!qrDone){try{new QRCode(document.getElementById('qr'),{text:qrurl,width:104,height:104,correctLevel:QRCode.CorrectLevel.M});qrDone=true;}catch(e){}}
 }
 
 function optTile(html,i,cls,mark){
@@ -1443,6 +1443,8 @@ function showJoin(msg){
    '<div class="center" style="flex:0;margin-top:18px"><div class="hint">O\\'qituvchi ekranidagi PIN kodni va ismingizni kiriting</div></div>';
   document.getElementById('jbtn').onclick=join;
   document.getElementById('nm').addEventListener('keydown',e=>{if(e.key==='Enter')join();});
+  const pref=(new URLSearchParams(location.search).get('pin')||'').replace(/\\D/g,'').slice(0,6);
+  if(pref){document.getElementById('pin').value=pref;setTimeout(()=>document.getElementById('nm').focus(),50);}
 }
 async function join(){
   const pin=(document.getElementById('pin').value||'').trim();
