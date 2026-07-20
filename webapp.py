@@ -230,7 +230,11 @@ def _test_page_html(token, remaining, total, cards_b64, name, avatar):
   display: flex; align-items: center; justify-content: center;
   font-weight: 800; font-size: 14px; transition: all 0.2s; position: relative; z-index: 1;
 }}
-.otext {{ flex: 1; position: relative; z-index: 1; }}
+.otext {{ flex: 1; min-width: 0; position: relative; z-index: 1;
+  overflow-wrap: anywhere; word-break: break-word; }}
+.stem, .otext {{ overflow-wrap: anywhere; }}
+.stem mjx-container, .otext mjx-container {{ max-width: 100%; overflow-x: auto; overflow-y: hidden; }}
+.stem img, .otext img {{ max-width: 100%; height: auto; }}
 
 /* ── PULSE ANIM on select ── */
 @keyframes pulse-ring {{
@@ -1080,3 +1084,440 @@ body {{ display:flex; align-items:center; justify-content:center; min-height:100
   <div class="msg">{html.escape(msg)}</div>
 </div>
 </body></html>"""
+
+# ═════════════════════════════════════════════════════════════════
+#  JONLI O'YIN (Kahoot uslubi) — host ekran + o'quvchi sahifasi
+# ═════════════════════════════════════════════════════════════════
+def _opt_html_i(q, i):
+    o = q["options"][i]
+    return render.fragment_to_html(o["xml"], db.get_media) or html.escape(o["text"] or "")
+
+
+# ---------- API ----------
+@app.post("/live/api/join")
+async def live_join(req: Request):
+    d = await req.json()
+    res = db.join_game(str(d.get("pin", "")).strip(), d.get("name", ""))
+    if res.get("error"):
+        return JSONResponse(res, status_code=400)
+    return JSONResponse(res)
+
+@app.get("/live/api/pstate")
+def live_pstate(pin: str, pid: int, tok: str):
+    return JSONResponse(db.player_state(pin, pid, tok))
+
+@app.post("/live/api/answer")
+async def live_answer(req: Request):
+    d = await req.json()
+    try:
+        res = db.submit_answer(str(d.get("pin", "")), int(d.get("pid")), d.get("tok", ""), d.get("choice"))
+    except Exception:
+        res = {"ok": False, "reason": "bad"}
+    return JSONResponse(res)
+
+@app.get("/live/api/hstate")
+def live_hstate(pin: str, tok: str):
+    g = db.get_game_by_host(tok)
+    if not g or g["pin"] != pin:
+        return JSONResponse({"error": "auth"}, status_code=403)
+    data = db.host_state(pin)
+    if data and data.get("qid"):
+        q = db.get_question(data["qid"])
+        data["q_html"] = _q_html(q)
+        data["opts_html"] = [_opt_html_i(q, i) for i in range(min(len(q["options"]), 4))]
+    return JSONResponse(data)
+
+@app.post("/live/api/host")
+async def live_host(req: Request):
+    d = await req.json()
+    data = db.host_advance(d.get("tok", ""), d.get("action", ""))
+    if data is None:
+        return JSONResponse({"error": "auth"}, status_code=403)
+    return JSONResponse(data)
+
+
+# ---------- pages ----------
+@app.get("/", response_class=HTMLResponse)
+def live_root():
+    return HTMLResponse("<!DOCTYPE html><meta charset='utf-8'>"
+                        "<meta http-equiv='refresh' content='0; url=/join'>"
+                        "<a href='/join'>Jonli o'yinga qo'shilish</a>")
+
+@app.get("/join", response_class=HTMLResponse)
+def join_page():
+    return HTMLResponse(_player_html())
+
+@app.get("/host/{pin}/{host_token}", response_class=HTMLResponse)
+def host_page(pin: str, host_token: str):
+    g = db.get_game_by_host(host_token)
+    if not g or g["pin"] != pin:
+        return HTMLResponse(_error_page("O'yin topilmadi yoki havola noto'g'ri."), status_code=404)
+    return HTMLResponse(_host_html(pin, host_token))
+
+
+_LIVE_BASE = """
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
+*{box-sizing:border-box;margin:0;padding:0}
+:root{--bg1:#0a0a1a;--bg2:#12123a;--neon:#6c63ff;--neon2:#a855f7;--text:#f1f5f9;--muted:#94a3b8;
+--glass:rgba(255,255,255,.06);--gb:rgba(255,255,255,.12);
+--red:#e21b3c;--blue:#1368ce;--yellow:#d89e00;--green:#26890c;
+--gold:#f5b301;--silver:#c8d0dc;--bronze:#cd7c2f}
+body{font-family:'Inter',-apple-system,sans-serif;color:var(--text);min-height:100vh;
+background:radial-gradient(ellipse at 18% 12%,rgba(108,99,255,.20),transparent 55%),
+radial-gradient(ellipse at 85% 85%,rgba(168,85,247,.18),transparent 55%),
+radial-gradient(ellipse at 50% 50%,var(--bg2),var(--bg1) 80%);}
+.shp{font-weight:900}
+.opt>span{min-width:0;overflow-wrap:anywhere;word-break:break-word}
+mjx-container{max-width:100%;overflow-x:auto;overflow-y:hidden}
+.fade{animation:fade .35s ease}@keyframes fade{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+@keyframes pop{from{opacity:0;transform:scale(.6)}to{opacity:1;transform:scale(1)}}
+@keyframes bob{0%,100%{transform:translateY(0)}50%{transform:translateY(-7px)}}
+@keyframes drop{0%{opacity:1;transform:translateY(0) rotate(0)}100%{opacity:0;transform:translateY(90vh) rotate(540deg)}}
+"""
+
+
+# ─────────────────────────────────────────────
+#  HOST (katta ekran)  /host/{pin}/{host_token}
+# ─────────────────────────────────────────────
+def _host_html(pin, host_token):
+    cfg = json.dumps({"pin": pin, "tok": host_token})
+    tpl = """<!DOCTYPE html><html lang="uz"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Jonli Test — Host</title>
+<script>window.MathJax={tex:{},options:{},startup:{typeset:false}};</script>
+<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/mml-chtml.js" id="MathJax-script" async></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<style>__BASE__
+.wrap{max-width:1080px;margin:0 auto;padding:20px 18px 120px;min-height:100vh;display:flex;flex-direction:column}
+.top{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px;flex-wrap:wrap}
+.brand{display:flex;align-items:center;gap:10px;font-weight:900;font-size:22px}
+.brand .dot{width:34px;height:34px;border-radius:10px;background:linear-gradient(135deg,var(--neon),var(--neon2));display:grid;place-items:center;font-size:18px}
+.brand b{background:linear-gradient(135deg,#c4b5fd,#f0abfc);-webkit-background-clip:text;background-clip:text;color:transparent}
+.qbadge{font-size:14px;font-weight:800;color:#c4b5fd;background:rgba(108,99,255,.16);border:1px solid rgba(108,99,255,.3);padding:6px 14px;border-radius:99px}
+.stage{flex:1;background:linear-gradient(160deg,#0c0d20,#131638);border:1px solid var(--gb);border-radius:20px;padding:26px;display:flex;flex-direction:column;position:relative;overflow:hidden}
+/* lobby */
+.pincard{background:#fff;color:#111;border-radius:16px;padding:16px 22px;display:flex;align-items:center;gap:22px;align-self:center;margin-bottom:16px;box-shadow:0 10px 30px rgba(0,0,0,.4)}
+.pincard .lab{font-size:12px;font-weight:800;color:#555;text-transform:uppercase;letter-spacing:.5px}
+.pincard .pin{font-size:52px;font-weight:900;letter-spacing:6px;line-height:1}
+.pincard .join{font-size:14px;color:#333;font-weight:700}
+#qr{width:104px;height:104px;background:#fff;border-radius:10px;display:grid;place-items:center;overflow:hidden}
+#qr img,#qr canvas{width:100%!important;height:100%!important}
+.cnt{text-align:center;font-size:17px;color:var(--muted);font-weight:700;margin-bottom:14px}
+.cnt b{color:#fff;font-size:26px}
+.players{display:flex;flex-wrap:wrap;gap:10px;justify-content:center;align-content:flex-start;flex:1}
+.chip{display:flex;align-items:center;gap:8px;background:var(--glass);border:1px solid var(--gb);border-radius:99px;padding:7px 16px 7px 8px;font-weight:800;font-size:16px;animation:pop .3s ease}
+.chip .av{font-size:22px}
+.empty{margin:auto;color:var(--muted);font-weight:700;font-size:17px;text-align:center}
+/* question */
+.qhead{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
+.ring-wrap{position:relative;width:72px;height:72px}.ring-wrap svg{transform:rotate(-90deg)}
+.ring-txt{position:absolute;inset:0;display:grid;place-items:center;font-weight:900;font-size:26px}
+.alive{text-align:right;font-weight:800;color:var(--muted);font-size:15px}.alive b{display:block;color:#fff;font-size:30px}
+.qtext{font-size:30px;font-weight:800;line-height:1.35;text-align:center;margin:16px 10px;flex:1;display:flex;align-items:center;justify-content:center}
+.qtext img{max-height:240px;max-width:100%;border-radius:10px;background:#fff;padding:6px}
+.opts{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.opt{display:flex;align-items:center;gap:14px;border-radius:14px;padding:20px 22px;font-weight:800;font-size:22px;color:#fff;min-height:74px}
+.opt img{max-height:60px;background:#fff;border-radius:6px;padding:3px}
+.opt.red{background:var(--red)}.opt.blue{background:var(--blue)}.opt.yellow{background:var(--yellow)}.opt.green{background:var(--green)}
+.opt.dim{opacity:.3}.opt.win{outline:5px solid #fff;box-shadow:0 0 0 4px rgba(255,255,255,.25);transform:scale(1.02)}
+.opt .mk{margin-left:auto;font-size:26px;font-weight:900}
+/* reveal */
+.rev-h{text-align:center;font-size:24px;font-weight:800;margin-bottom:14px}.rev-h b{color:#34d399}
+.bars{display:flex;align-items:flex-end;justify-content:center;gap:26px;height:170px;margin:6px 0 16px}
+.bar{width:60px;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%}
+.bar .fill{width:100%;border-radius:8px 8px 0 0;color:#fff;font-weight:900;text-align:center;padding-top:5px;transition:height .8s cubic-bezier(.4,0,.2,1);height:0;min-height:2px}
+.bar.red .fill{background:var(--red)}.bar.blue .fill{background:var(--blue)}.bar.yellow .fill{background:var(--yellow)}.bar.green .fill{background:var(--green)}
+.bar .s{margin-top:8px;font-size:22px}
+/* board */
+.btitle{text-align:center;font-size:24px;font-weight:900;margin-bottom:18px}
+.row{display:flex;align-items:center;gap:14px;background:var(--glass);border:1px solid var(--gb);border-radius:14px;padding:14px 18px;margin-bottom:11px;font-weight:800;animation:pop .35s ease backwards}
+.row .rk{width:32px;height:32px;border-radius:9px;background:linear-gradient(135deg,var(--neon),var(--neon2));display:grid;place-items:center;font-weight:900;font-size:16px}
+.row .av{font-size:28px}.row .nm{flex:1;font-size:19px}.row .sc{font-size:20px;font-weight:900}
+/* podium */
+.pod-t{text-align:center;font-size:30px;font-weight:900;margin:6px 0}
+.pod-s{text-align:center;color:var(--muted);font-weight:700;margin-bottom:auto}
+.podium{display:flex;align-items:flex-end;justify-content:center;gap:20px;margin-top:16px}
+.pod{display:flex;flex-direction:column;align-items:center;width:150px}
+.pod .av{font-size:56px;margin-bottom:8px;animation:bob 2s ease-in-out infinite}
+.pod .pil{width:100%;border-radius:14px 14px 0 0;background:linear-gradient(180deg,rgba(108,99,255,.5),rgba(108,99,255,.14));border:1px solid var(--gb);border-bottom:none;display:flex;flex-direction:column;align-items:center;padding:16px 8px 20px}
+.pod .med{width:44px;height:44px;border-radius:11px;display:grid;place-items:center;font-weight:900;font-size:20px;color:#1a1a1a;margin-bottom:10px}
+.pod.p1 .med{background:var(--gold)}.pod.p2 .med{background:var(--silver)}.pod.p3 .med{background:var(--bronze)}
+.pod .nm{font-weight:900;font-size:19px}.pod .sc{color:var(--muted);font-weight:800}
+.pod.p1 .pil{height:200px}.pod.p2 .pil{height:150px}.pod.p3 .pil{height:118px}
+.confetti{position:absolute;top:-12px;width:11px;height:16px;border-radius:2px;pointer-events:none}
+/* control bar */
+.ctrl{position:fixed;left:0;right:0;bottom:0;background:rgba(8,9,20,.92);backdrop-filter:blur(14px);border-top:1px solid var(--gb);padding:14px 18px;display:flex;align-items:center;justify-content:center;gap:16px;z-index:20}
+.dots{display:flex;gap:6px}.dots .d{width:9px;height:9px;border-radius:50%;background:rgba(255,255,255,.18)}
+.dots .d.on{background:var(--neon);width:26px;border-radius:99px;box-shadow:0 0 10px var(--neon)}
+.cbtn{background:linear-gradient(135deg,var(--neon),var(--neon2));border:none;color:#fff;font-weight:800;font-size:17px;padding:13px 30px;border-radius:99px;cursor:pointer;font-family:inherit}
+.cbtn.ghost{background:var(--glass);border:1px solid var(--gb)}
+.cbtn:disabled{opacity:.4;cursor:default}
+@media(max-width:640px){.qtext{font-size:22px}.opt{font-size:17px;padding:14px}.pincard .pin{font-size:38px}}
+</style></head><body>
+<div class="wrap">
+  <div class="top">
+    <div class="brand"><span class="dot">⚡</span>Jonli <b>Test!</b></div>
+    <div class="qbadge" id="qbadge">Lobby</div>
+  </div>
+  <div class="stage" id="stage"><div class="empty">Yuklanmoqda…</div></div>
+</div>
+<div class="ctrl">
+  <div class="dots" id="dots"></div>
+  <button class="cbtn" id="primary" onclick="doPrimary()">…</button>
+</div>
+<script>
+const CFG=__CFG__;
+const SHAPES=['▲','◆','●','■'], COLORS=['red','blue','yellow','green'];
+const STATES=['lobby','question','reveal','scoreboard','ended'];
+let last=null, autoReveal=false, confDone=false, qrDone=false;
+
+async function poll(){
+  try{
+    const r=await fetch('/live/api/hstate?pin='+CFG.pin+'&tok='+encodeURIComponent(CFG.tok));
+    if(!r.ok){return;}
+    const d=await r.json(); render(d);
+  }catch(e){}
+}
+async function act(action){
+  autoReveal=false;
+  try{await fetch('/live/api/host',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({tok:CFG.tok,action:action})});}catch(e){}
+  poll();
+}
+function doPrimary(){
+  if(!last)return; const s=last.state;
+  if(s==='lobby')act('start');
+  else if(s==='question')act('reveal');
+  else if(s==='reveal')act('scoreboard');
+  else if(s==='scoreboard')act('next');
+}
+function setDots(i){const el=document.getElementById('dots');el.innerHTML='';
+  for(let k=0;k<5;k++){const d=document.createElement('div');d.className='d'+(k===i?' on':'');el.appendChild(d);}}
+function typeset(){if(window.MathJax&&MathJax.typesetPromise)MathJax.typesetPromise([document.getElementById('stage')]).catch(()=>{});}
+
+function render(d){
+  if(d.error)return;
+  last=d; const st=document.getElementById('stage'); const s=d.state;
+  document.getElementById('qbadge').textContent = (s==='question'||s==='reveal')?('Savol '+d.q_number+'/'+d.total):
+     (s==='lobby'?'Lobby':(s==='ended'?'Yakun':'Reyting'));
+  setDots(STATES.indexOf(s));
+  const pb=document.getElementById('primary');
+  pb.style.display='';
+  if(s==='lobby'){pb.textContent=(d.players_n>0?'Boshlash ▶':'O\\'quvchilarni kuting…');pb.disabled=d.players_n===0;}
+  else if(s==='question'){pb.textContent='Javobni ochish ▶';pb.disabled=false;}
+  else if(s==='reveal'){pb.textContent='Reyting ▶';pb.disabled=false;}
+  else if(s==='scoreboard'){pb.textContent=(d.idx+1<d.total)?'Keyingi savol ▶':'Yakuniy natija 🏆';pb.disabled=false;}
+  else{pb.style.display='none';}
+
+  if(s==='lobby')renderLobby(d,st);
+  else if(s==='question')renderQuestion(d,st);
+  else if(s==='reveal')renderReveal(d,st);
+  else if(s==='scoreboard')renderBoard(d,st);
+  else if(s==='ended')renderPodium(d,st);
+}
+
+function renderLobby(d,st){
+  const url=CFG.joinurl;
+  const chips=(d.players||[]).map(p=>'<div class="chip"><span class="av">'+p.avatar+'</span>'+esc(p.name)+'</div>').join('');
+  st.innerHTML=
+   '<div class="pincard"><div><div class="lab">Qo\\'shilish uchun</div>'+
+   '<div class="pin">'+d.pin.replace(/(\\d{3})(\\d{3})/,'$1 $2')+'</div>'+
+   '<div class="join">'+esc(url.replace(/^https?:\\/\\//,''))+'</div></div><div id="qr"></div></div>'+
+   '<div class="cnt"><b>'+d.players_n+'</b> o\\'quvchi qo\\'shildi</div>'+
+   '<div class="players">'+(chips||'<div class="empty">Birinchi o\\'quvchini kutmoqdamiz…</div>')+'</div>';
+  if(!qrDone){try{new QRCode(document.getElementById('qr'),{text:url,width:104,height:104,correctLevel:QRCode.CorrectLevel.M});qrDone=true;}catch(e){}}
+}
+
+function optTile(html,i,cls,mark){
+  return '<div class="opt '+COLORS[i]+(cls||'')+'"><span class="shp">'+SHAPES[i]+'</span><span>'+html+'</span>'+(mark?'<span class="mk">'+mark+'</span>':'')+'</div>';
+}
+function renderQuestion(d,st){
+  const n=d.n_opts||4;
+  let opts='';for(let i=0;i<n;i++)opts+=optTile(d.opts_html[i],i,'','');
+  const per=d.per_q_time||20, rem=d.remaining!=null?d.remaining:per;
+  const C=150.8, off=C*(1-rem/per);
+  const col=rem<=5?'#ef4444':(rem<=10?'#f59e0b':'#6c63ff');
+  st.innerHTML=
+   '<div class="qhead"><div class="qbadge">Savol '+d.q_number+'/'+d.total+'</div>'+
+   '<div class="ring-wrap"><svg width="72" height="72"><circle cx="36" cy="36" r="24" fill="none" stroke="rgba(255,255,255,.12)" stroke-width="6"/>'+
+   '<circle cx="36" cy="36" r="24" fill="none" stroke="'+col+'" stroke-width="6" stroke-linecap="round" stroke-dasharray="150.8" stroke-dashoffset="'+off+'" style="transition:stroke-dashoffset 1s linear,stroke .5s"/></svg>'+
+   '<div class="ring-txt">'+rem+'</div></div>'+
+   '<div class="alive"><b>'+d.answered+'</b>javob</div></div>'+
+   '<div class="qtext">'+d.q_html+'</div><div class="opts">'+opts+'</div>';
+  typeset();
+  if(rem<=0 && !autoReveal){autoReveal=true;act('reveal');}
+}
+function renderReveal(d,st){
+  const n=d.n_opts||4, cor=d.correct, mx=Math.max(1,...d.counts);
+  let bars='';for(let i=0;i<n;i++){const h=Math.round(d.counts[i]/mx*100);
+    bars+='<div class="bar '+COLORS[i]+'"><div class="fill" data-h="'+h+'">'+d.counts[i]+'</div><div class="s">'+SHAPES[i]+'</div></div>';}
+  let opts='';for(let i=0;i<n;i++)opts+=optTile(d.opts_html[i],i,i===cor?' win':' dim',i===cor?'✓':'✕');
+  st.innerHTML='<div class="rev-h">To\\'g\\'ri javob: <b>'+SHAPES[cor]+'</b></div>'+
+   '<div class="bars">'+bars+'</div><div class="opts">'+opts+'</div>';
+  typeset();
+  requestAnimationFrame(()=>{st.querySelectorAll('.fill').forEach(f=>f.style.height=f.dataset.h+'%');});
+}
+function renderBoard(d,st){
+  const rows=(d.scoreboard||[]).map((p,i)=>
+   '<div class="row" style="animation-delay:'+(i*.06)+'s"><div class="rk">'+(i+1)+'</div>'+
+   '<div class="av">'+p.avatar+'</div><div class="nm">'+esc(p.name)+'</div><div class="sc">'+p.score+'</div></div>').join('');
+  st.innerHTML='<div class="btitle">🏆 Reyting</div>'+(rows||'<div class="empty">—</div>');
+}
+function renderPodium(d,st){
+  const p=d.podium||[]; const slot=(x,cls,pos)=> x?
+   '<div class="pod '+cls+'"><div class="av">'+x.avatar+'</div><div class="pil"><div class="med">'+pos+'</div>'+
+   '<div class="nm">'+esc(x.name)+'</div><div class="sc">'+x.score+'</div></div></div>':'';
+  st.innerHTML='<div class="pod-t">🎉 Tabriklaymiz!</div><div class="pod-s">Eng ko\\'p ball to\\'plaganlar</div>'+
+   '<div class="podium">'+slot(p[1],'p2',2)+slot(p[0],'p1',1)+slot(p[2],'p3',3)+'</div>';
+  if(!confDone){confDone=true;confetti(st);}
+}
+function confetti(st){const cols=['#f5b301','#6c63ff','#e21b3c','#26890c','#1368ce','#a855f7'];
+  for(let i=0;i<50;i++){const c=document.createElement('div');c.className='confetti';
+    c.style.left=Math.random()*100+'%';c.style.background=cols[i%cols.length];
+    c.style.animation='drop '+(1.8+Math.random()*1.6)+'s linear '+(Math.random()*.6)+'s forwards';st.appendChild(c);}}
+function esc(s){return (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+
+CFG.joinurl=location.origin+'/join';
+poll();setInterval(poll,1000);
+</script></body></html>"""
+    return tpl.replace("__BASE__", _LIVE_BASE).replace("__CFG__", cfg)
+
+
+# ─────────────────────────────────────────────
+#  O'QUVCHI (telefon)  /join
+# ─────────────────────────────────────────────
+def _player_html():
+    tpl = """<!DOCTYPE html><html lang="uz"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Jonli Test</title>
+<style>__BASE__
+.app{max-width:460px;margin:0 auto;min-height:100vh;padding:18px 16px;display:flex;flex-direction:column}
+.brand{text-align:center;font-weight:900;font-size:30px;margin:18px 0 22px}
+.brand .dot{display:inline-grid;place-items:center;width:40px;height:40px;border-radius:12px;background:linear-gradient(135deg,var(--neon),var(--neon2));vertical-align:middle;margin-right:8px}
+.brand b{background:linear-gradient(135deg,#c4b5fd,#f0abfc);-webkit-background-clip:text;background-clip:text;color:transparent}
+.card{background:var(--glass);border:1px solid var(--gb);border-radius:18px;padding:20px;display:flex;flex-direction:column;gap:12px}
+input{background:#fff;color:#111;border:none;border-radius:12px;padding:15px 16px;font-size:17px;font-weight:700;font-family:inherit;text-align:center;width:100%}
+input::placeholder{color:#9aa}
+.pinput{letter-spacing:5px;font-size:24px;font-weight:900}
+.btn{background:linear-gradient(135deg,var(--neon),var(--neon2));border:none;color:#fff;font-weight:800;font-size:18px;padding:15px;border-radius:12px;cursor:pointer;font-family:inherit;width:100%}
+.btn:disabled{opacity:.5}
+.err{color:#fca5a5;font-weight:700;font-size:14px;text-align:center;min-height:18px}
+.hint{color:var(--muted);font-size:14px;font-weight:600;text-align:center;line-height:1.6}
+.view{flex:1;display:flex;flex-direction:column}
+.center{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:12px}
+.av{font-size:64px;animation:bob 2.4s ease-in-out infinite}
+.you{font-weight:900;font-size:22px}
+.quad{flex:1;display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr;gap:12px;min-height:60vh}
+.pad{border:none;border-radius:18px;cursor:pointer;display:grid;place-items:center;color:#fff;font-size:46px;transition:transform .1s;font-weight:900}
+.pad:active{transform:scale(.94)}.pad:disabled{opacity:.4}
+.pad.red{background:var(--red)}.pad.blue{background:var(--blue)}.pad.yellow{background:var(--yellow)}.pad.green{background:var(--green)}
+.toplab{text-align:center;font-size:14px;color:var(--muted);font-weight:700;margin-bottom:10px}
+.toplab b{color:#fff}
+.result{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:8px;border-radius:20px;margin:6px}
+.result.good{background:rgba(38,137,12,.18);border:1px solid rgba(52,211,153,.4)}
+.result.bad{background:rgba(226,27,60,.14);border:1px solid rgba(226,27,60,.4)}
+.result .big{font-size:64px}.result .ttl{font-size:28px;font-weight:900}
+.result .pts{font-size:20px;font-weight:800}.result.good .pts{color:#34d399}
+.result .rk{font-size:15px;color:var(--muted);font-weight:800;margin-top:6px}
+.medal{font-size:70px}
+</style></head><body>
+<div class="app">
+  <div class="brand"><span class="dot">⚡</span>Jonli <b>Test!</b></div>
+  <div class="view" id="view"></div>
+</div>
+<script>
+const SHAPES=['▲','◆','●','■'],COLORS=['red','blue','yellow','green'];
+let sess=null, myChoice=null, lastState=null, poller=null;
+try{sess=JSON.parse(localStorage.getItem('jt_sess')||'null');}catch(e){}
+
+const view=document.getElementById('view');
+function esc(s){return (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+
+function showJoin(msg){
+  stopPoll();
+  view.innerHTML=
+   '<div class="card"><input id="pin" class="pinput" inputmode="numeric" maxlength="6" placeholder="PIN kod">'+
+   '<input id="nm" maxlength="20" placeholder="Ismingiz">'+
+   '<div class="err" id="err">'+(msg||'')+'</div>'+
+   '<button class="btn" id="jbtn">Kirish</button></div>'+
+   '<div class="center" style="flex:0;margin-top:18px"><div class="hint">O\\'qituvchi ekranidagi PIN kodni va ismingizni kiriting</div></div>';
+  document.getElementById('jbtn').onclick=join;
+  document.getElementById('nm').addEventListener('keydown',e=>{if(e.key==='Enter')join();});
+}
+async function join(){
+  const pin=(document.getElementById('pin').value||'').trim();
+  const name=(document.getElementById('nm').value||'').trim();
+  const err=document.getElementById('err');
+  if(pin.length<4){err.textContent='PIN kodni kiriting';return;}
+  if(!name){err.textContent='Ismingizni yozing';return;}
+  document.getElementById('jbtn').disabled=true;
+  try{
+    const r=await fetch('/live/api/join',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pin,name})});
+    const d=await r.json();
+    if(d.error){err.textContent=d.error==='notfound'?'Bunday o\\'yin yo\\'q':(d.error==='started'?'O\\'yin allaqachon boshlangan':'Xatolik');document.getElementById('jbtn').disabled=false;return;}
+    sess=d;localStorage.setItem('jt_sess',JSON.stringify(d));myChoice=null;startPoll();
+  }catch(e){err.textContent='Ulanish xatosi';document.getElementById('jbtn').disabled=false;}
+}
+function leave(){localStorage.removeItem('jt_sess');sess=null;showJoin('');}
+
+function startPoll(){stopPoll();poll();poller=setInterval(poll,1000);}
+function stopPoll(){if(poller){clearInterval(poller);poller=null;}}
+async function poll(){
+  if(!sess)return;
+  try{
+    const r=await fetch('/live/api/pstate?pin='+sess.pin+'&pid='+sess.player_id+'&tok='+encodeURIComponent(sess.token));
+    const d=await r.json();render(d);
+  }catch(e){}
+}
+async function answer(i){
+  if(myChoice!=null)return;myChoice=i;renderAnswered();
+  try{await fetch('/live/api/answer',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({pin:sess.pin,pid:sess.player_id,tok:sess.token,choice:i})});}catch(e){}
+}
+
+function render(d){
+  if(!d||d.state==='gone'){leave();return;}
+  if(d.state!==lastState){myChoiceReset(d);}
+  lastState=d.state;
+  if(d.state==='lobby')renderWait(d);
+  else if(d.state==='question'){ if(d.answered||myChoice!=null){myChoice=d.my_choice!=null?d.my_choice:myChoice;renderAnswered();} else renderPads(d);}
+  else if(d.state==='reveal'||d.state==='scoreboard')renderResult(d);
+  else if(d.state==='ended')renderEnd(d);
+}
+function myChoiceReset(d){ if(d.state==='question'){ myChoice = d.my_choice!=null?d.my_choice:null; } }
+
+function renderWait(d){
+  view.innerHTML='<div class="center"><div class="av">'+d.avatar+'</div><div class="you">'+esc(d.name)+'</div>'+
+   '<div class="hint">Siz o\\'yindasiz! 🎉<br>Katta ekranga qarang —<br>o\\'yin boshlanishini kuting.</div></div>';
+}
+function renderPads(d){
+  const n=d.n_opts||4;let pads='';
+  for(let i=0;i<n;i++)pads+='<button class="pad '+COLORS[i]+'" onclick="answer('+i+')">'+SHAPES[i]+'</button>';
+  view.innerHTML='<div class="toplab">Savol ekranda 👆 · javob rangini bosing · <b>'+(d.remaining!=null?d.remaining+'s':'')+'</b></div>'+
+   '<div class="quad">'+pads+'</div>';
+}
+function renderAnswered(){
+  const sh=myChoice!=null?SHAPES[myChoice]:'✓',cl=myChoice!=null?COLORS[myChoice]:'';
+  view.innerHTML='<div class="center"><div class="av" style="animation:none;color:var(--'+cl+')">'+sh+'</div>'+
+   '<div class="you">Javob qabul qilindi</div><div class="hint">Boshqalarni kutmoqdamiz…<br>Natija tez orada.</div></div>';
+}
+function renderResult(d){
+  const good=d.correct;
+  view.innerHTML='<div class="result '+(good?'good':'bad')+'">'+
+   '<div class="big">'+(good?'✓':(d.answered?'✕':'⏱'))+'</div>'+
+   '<div class="ttl">'+(good?'To\\'g\\'ri!':(d.answered?'Xato':'Ulgurmading'))+'</div>'+
+   '<div class="pts">'+(good?'+'+d.points+' ball':'0 ball')+'</div>'+
+   '<div class="rk">'+(d.rank?('Hozircha '+d.rank+'-o\\'rin · '+d.score+' ball'):'')+'</div></div>';
+}
+function renderEnd(d){
+  const medals=['🥇','🥈','🥉'];const m=d.rank&&d.rank<=3?medals[d.rank-1]:'🏁';
+  view.innerHTML='<div class="center"><div class="medal">'+m+'</div>'+
+   '<div class="you">'+(d.rank?d.rank+'-o\\'rin!':'Yakunlandi')+'</div>'+
+   '<div class="hint">'+d.score+' ball · '+esc(d.name)+'<br>Zo\\'r o\\'ynading! 👏</div>'+
+   '<button class="btn" style="margin-top:10px;max-width:200px" onclick="leave()">Yangi o\\'yin</button></div>';
+  stopPoll();
+}
+
+if(sess){startPoll();}else{showJoin('');}
+</script></body></html>"""
+    return tpl.replace("__BASE__", _LIVE_BASE)
