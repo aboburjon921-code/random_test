@@ -18,22 +18,27 @@ if not BASE_URL and os.environ.get("RAILWAY_PUBLIC_DOMAIN"):
 
 COUNTS = [10, 20, 30, 40, 50]
 TIMES = [15, 30, 45, 60]
+LIVE_TIMES = [10, 15, 20, 30]   # jonli o'yin: har savolga soniya
+TOPICS_PER_PAGE = 6             # mavzu tanlashda bir sahifadagi mavzular soni
 
 BTN_NEW = "➕ Yangi test"; BTN_BASES = "📚 Bazalarim"; BTN_RESULTS = "📊 Natijalar"
-BTN_CLEAR = "🗑 Bazani tozalash"; BTN_HELP = "ℹ️ Yordam"
+BTN_CLEAR = "🗑 Bazani tozalash"; BTN_HELP = "ℹ️ Yordam"; BTN_LIVE = "🎮 Jonli o'yin"
 
 
 def is_admin(uid): return (not ADMIN_IDS) or (uid in ADMIN_IDS)
 
 def menu():
     return ReplyKeyboardMarkup(
-        [[KeyboardButton(BTN_NEW)], [KeyboardButton(BTN_BASES), KeyboardButton(BTN_RESULTS)],
+        [[KeyboardButton(BTN_NEW), KeyboardButton(BTN_LIVE)],
+         [KeyboardButton(BTN_BASES), KeyboardButton(BTN_RESULTS)],
          [KeyboardButton(BTN_CLEAR), KeyboardButton(BTN_HELP)]], resize_keyboard=True)
 
 HELP = ("ℹ️ <b>Qo'llanma</b>\n\n1️⃣ Word bazani (.docx) yuboring — <code>#1.</code> va to'g'ri javobda <code>+</code>.\n"
         "2️⃣ <b>➕ Yangi test</b> → savol soni → rejim → vaqt → test <b>kodi</b>.\n"
         "3️⃣ Kod/havolani o'quvchilarga bering. Ular web-oynada formulalarni ko'rib yechadi.\n"
         "4️⃣ <b>📊 Natijalar</b> — jonli panel: kim yechyapti, ball, o'rtacha.\n\n"
+        "🎮 <b>Jonli o'yin</b> — Kahoot uslubi: savol sizning ekraningizda, o'quvchilar "
+        "telefonda rang tanlab javob beradi, oxirida top-3 podium.\n\n"
         "Formula, grek, indeks, rasm — web-oynada chiroyli ko'rinadi.")
 
 
@@ -104,13 +109,19 @@ async def on_kind(update, ctx):
     bases = db.base_list(uid)
     ctx.user_data["bases"] = {b["id"]: {"name": b["name"], "n": b["n"]} for b in bases}
     ctx.user_data["topics"] = {b["id"]: 0 for b in bases}
+    ctx.user_data["tpage"] = 0
     await q.edit_message_text("📚 Har mavzudan nechta savol? ➕ / ➖ bilan sozlang:",
                               reply_markup=_topics_kb(ctx))
 
 def _topics_kb(ctx):
     bases = ctx.user_data.get("bases", {}); topics = ctx.user_data.get("topics", {})
+    items = list(bases.items())
+    per = TOPICS_PER_PAGE
+    pages = max(1, (len(items) + per - 1) // per)
+    page = max(0, min(ctx.user_data.get("tpage", 0), pages - 1))
+    ctx.user_data["tpage"] = page
     rows = []
-    for bid, info in bases.items():
+    for bid, info in items[page * per:(page + 1) * per]:
         nm = info["name"]
         if nm.lower().endswith(".docx"): nm = nm[:-5]
         nm = nm[:22]
@@ -118,9 +129,25 @@ def _topics_kb(ctx):
             InlineKeyboardButton(f"{nm} · {topics.get(bid,0)}/{info['n']}", callback_data="noop"),
             InlineKeyboardButton("➖", callback_data=f"tminus:{bid}"),
             InlineKeyboardButton("➕", callback_data=f"tplus:{bid}")])
+    if pages > 1:
+        rows.append([
+            InlineKeyboardButton("◀️", callback_data=f"tpage:{page-1}" if page > 0 else "noop"),
+            InlineKeyboardButton(f"{page+1}/{pages} sahifa", callback_data="noop"),
+            InlineKeyboardButton("▶️", callback_data=f"tpage:{page+1}" if page < pages - 1 else "noop")])
     total = sum(topics.values())
     rows.append([InlineKeyboardButton(f"✅ Davom — jami {total} ta", callback_data="tdone")])
     return InlineKeyboardMarkup(rows)
+
+async def on_topic_page(update, ctx):
+    q = update.callback_query; await q.answer()
+    try:
+        ctx.user_data["tpage"] = int(q.data.split(":")[1])
+    except Exception:
+        return
+    try:
+        await q.edit_message_reply_markup(reply_markup=_topics_kb(ctx))
+    except Exception:
+        pass
 
 async def on_topic_step(update, ctx):
     q = update.callback_query
@@ -315,7 +342,18 @@ async def on_text(update, ctx):
         if text == BTN_BASES: return await show_bases(update, ctx)
         if text == BTN_RESULTS: return await show_results_list(update, ctx)
         if text == BTN_CLEAR: return await ask_clear(update, ctx)
+        if text == BTN_LIVE: return await start_live(update, ctx)
         if text == BTN_HELP: return await update.message.reply_html(HELP, reply_markup=menu())
+        if ctx.user_data.get("await_lcount"):
+            ctx.user_data["await_lcount"] = False
+            if not text.isdigit(): return await update.message.reply_text("Faqat son yuboring.")
+            ctx.user_data["live"] = {"count": int(text)}
+            return await update.message.reply_text("⏱ Har bir savolga necha soniya vaqt berilsin?",
+                                                   reply_markup=_live_time_kb())
+        if ctx.user_data.get("await_ltime"):
+            ctx.user_data["await_ltime"] = False
+            if not text.isdigit(): return await update.message.reply_text("Faqat son yuboring.")
+            return await _create_live(update, ctx, int(text))
         if ctx.user_data.get("await_count"):
             ctx.user_data["await_count"] = False
             if not text.isdigit(): return await update.message.reply_text("Faqat son yuboring.")
@@ -401,6 +439,74 @@ async def on_name(update, ctx, name):
                                     "Testni ochish uchun tugmani bosing 👇", reply_markup=kb)
 
 
+# ─────────────────────────────────────────────
+#  JONLI O'YIN (Kahoot uslubi)
+# ─────────────────────────────────────────────
+def _live_count_kb(total):
+    btns = [InlineKeyboardButton(f"{n} ta", callback_data=f"lcnt:{n}") for n in COUNTS if n <= total]
+    rows = [btns[i:i+3] for i in range(0, len(btns), 3)] if btns else []
+    rows.append([InlineKeyboardButton(f"✅ Barchasi ({total})", callback_data=f"lcnt:{total}"),
+                 InlineKeyboardButton("✏️ Boshqa", callback_data="lcnt:custom")])
+    return InlineKeyboardMarkup(rows)
+
+def _live_time_kb():
+    row = [InlineKeyboardButton(f"{t} s", callback_data=f"lt:{t}") for t in LIVE_TIMES]
+    return InlineKeyboardMarkup([row, [InlineKeyboardButton("✏️ Boshqa", callback_data="lt:custom")]])
+
+async def start_live(update, ctx):
+    uid = update.effective_user.id
+    total = db.question_count(uid)
+    if total == 0:
+        return await update.message.reply_text("Avval Word baza (.docx) yuboring.", reply_markup=menu())
+    if not BASE_URL:
+        return await update.message.reply_text("⚠️ Server manzili sozlanmagan (BASE_URL). Jonli o'yin ishlamaydi.",
+                                               reply_markup=menu())
+    ctx.user_data.pop("live", None)
+    await update.message.reply_text(
+        f"🎮 <b>Jonli o'yin</b> (Kahoot uslubi)\n\nBazada {total} ta savol. Nechta savol o'ynaymiz?",
+        parse_mode="HTML", reply_markup=_live_count_kb(total))
+
+async def on_live_count(update, ctx):
+    q = update.callback_query; await q.answer()
+    val = q.data.split(":")[1]
+    if val == "custom":
+        ctx.user_data["await_lcount"] = True
+        return await q.edit_message_text("✏️ Nechta savol? Sonini yozing:")
+    ctx.user_data["live"] = {"count": int(val)}
+    await q.edit_message_text("⏱ Har bir savolga necha soniya vaqt berilsin?",
+                              reply_markup=_live_time_kb())
+
+async def on_live_time(update, ctx):
+    q = update.callback_query; await q.answer()
+    val = q.data.split(":")[1]
+    if val == "custom":
+        ctx.user_data["await_ltime"] = True
+        return await q.edit_message_text("✏️ Necha soniya? Sonini yozing (masalan 20):")
+    await _create_live(update, ctx, int(val))
+
+async def _create_live(update, ctx, secs):
+    uid = update.effective_user.id
+    secs = max(5, min(secs, 120))
+    count = ctx.user_data.get("live", {}).get("count", 10)
+    total = db.question_count(uid)
+    count = max(1, min(count, total))
+    title = f"Jonli o'yin ({count} ta)"
+    pin, tok, n = await asyncio.to_thread(db.create_live_pick, uid, title, count, secs, None)
+    if not pin:
+        return await update.effective_message.reply_text("Savol topilmadi.", reply_markup=menu())
+    host_url = f"{BASE_URL}/host/{pin}/{tok}"
+    join_url = f"{BASE_URL}/join"
+    txt = (f"🎮 <b>Jonli o'yin tayyor!</b>\n\n"
+           f"🔑 PIN: <code>{pin}</code>\n"
+           f"📝 Savollar: {n} ta · ⏱ har biriga {secs} s\n\n"
+           f"👨‍🏫 <b>Host ekran</b> (proyektor/TV — kompyuterda oching):\n{host_url}\n\n"
+           f"👨‍🎓 <b>O'quvchilar</b>: {join_url}\n"
+           f"      sahifaga kirib PIN <b>{pin}</b> va ismini yozadi.")
+    rows = [[InlineKeyboardButton("🖥 Host ekranini ochish", web_app=WebAppInfo(url=host_url))]]
+    await update.effective_message.reply_html(txt, reply_markup=InlineKeyboardMarkup(rows))
+    ctx.user_data.pop("live", None)
+
+
 def build_app():
     app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", cmd_start))
@@ -409,6 +515,7 @@ def build_app():
     app.add_handler(CommandHandler("results", show_results_list))
     app.add_handler(CallbackQueryHandler(on_kind, pattern=r"^kind:"))
     app.add_handler(CallbackQueryHandler(on_topic_step, pattern=r"^(tplus:|tminus:|noop$)"))
+    app.add_handler(CallbackQueryHandler(on_topic_page, pattern=r"^tpage:"))
     app.add_handler(CallbackQueryHandler(on_topic_done, pattern=r"^tdone$"))
     app.add_handler(CallbackQueryHandler(on_count, pattern=r"^cnt:"))
     app.add_handler(CallbackQueryHandler(on_mode, pattern=r"^mode:"))
@@ -418,6 +525,9 @@ def build_app():
     app.add_handler(CallbackQueryHandler(on_test_delete, pattern=r"^tdel:"))
     app.add_handler(CallbackQueryHandler(on_test_delete_confirm, pattern=r"^(tdelyes:|tdelno$)"))
     app.add_handler(CallbackQueryHandler(on_begin, pattern=r"^begin:"))
+    app.add_handler(CommandHandler("live", start_live))
+    app.add_handler(CallbackQueryHandler(on_live_count, pattern=r"^lcnt:"))
+    app.add_handler(CallbackQueryHandler(on_live_time, pattern=r"^lt:"))
     app.add_handler(MessageHandler(filters.Document.ALL, on_document))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
     return app
