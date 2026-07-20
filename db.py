@@ -386,6 +386,22 @@ def create_live_pick(owner_id, title, count, per_q_time=20, base_ids=None):
     pin, tok = create_live_game(owner_id, title, chosen, per_q_time)
     return pin, tok, len(chosen)
 
+def create_live_topics(owner_id, title, spec, per_q_time=20):
+    """spec: [(base_id, count), ...] — har mavzudan tasodifiy 'count' ta savol (jonli o'yin)."""
+    c = conn(); chosen = []
+    for base_id, count in spec:
+        if count <= 0:
+            continue
+        rows = c.execute("SELECT id FROM questions WHERE owner_id=? AND base_id=?",
+                         (owner_id, base_id)).fetchall()
+        ids = [r["id"] for r in rows]
+        random.shuffle(ids); chosen.extend(ids[:count])
+    if not chosen:
+        return None, None, 0
+    random.shuffle(chosen)   # mavzular aralashsin
+    pin, tok = create_live_game(owner_id, title, chosen, per_q_time)
+    return pin, tok, len(chosen)
+
 def get_game(pin):
     row = conn().execute("SELECT * FROM games WHERE pin=?", (pin,)).fetchone()
     if not row:
