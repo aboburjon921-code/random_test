@@ -41,3 +41,37 @@ Shu papkadagi barcha fayllarni repoga yuklang (`.env` YUKLANMAYDI).
 - Deploy'dan keyin bazani bir marta **🗑 tozalab, qayta yuklang** (formulalar to'liq saqlanishi uchun).
 - Faqat `.docx` (eski `.doc` emas).
 - Web-oyna Telegram ichida ochiladi; formulalar MathJax bilan chiziladi.
+
+---
+
+## 🎮 Jonli o'yin (Kahoot uslubi) — YANGI
+
+Uy-vazifa rejimiga tegmasdan qo'shildi. Ikki rejim yonma-yon ishlaydi.
+
+**O'qituvchi (Telegram bot):**
+1. `🎮 Jonli o'yin` tugmasi → savol soni → har savolga vaqt (soniya).
+2. Bot **PIN kod** + **Host ekran havolasi** beradi.
+3. Host havolasini proyektor/TV ulangan kompyuterda oching (`/host/<PIN>/<token>`).
+
+**O'quvchilar (Telegramsiz, brauzer):**
+- Telefon brauzerida `BASE_URL/join` (yoki QR skaner) → PIN + ism → o'yinga kirishadi.
+- Ularda faqat **4 rang/shakl** tugmasi chiqadi; savol matni faqat host ekranda.
+
+**Oqim:** Lobby → savol (taymer + jonli javob hisoblagichi) → to'g'ri javob + diagramma →
+reyting → yakunda **top-3 podium** (konfetti). Ball Kahootdek: tezlikka qarab 500–1000 +
+ketma-ket to'g'ri javob uchun streak bonusi (+100…+500).
+
+### Yangi qismlar
+- `db.py` — `games`, `gplayers`, `ganswers` jadvallari + o'yin mantiqi (`create_live_pick`,
+  `join_game`, `submit_answer`, `host_advance`, `host_state`, `player_state`).
+- `webapp.py` — `/join` (o'quvchi), `/host/<pin>/<token>` (katta ekran) sahifalari va
+  `/live/api/*` endpointlari (polling, ~1 s).
+- `bot.py` — `🎮 Jonli o'yin` tugmasi va yaratish oqimi.
+
+### Server eslatmasi
+- `BASE_URL` (yoki `RAILWAY_PUBLIC_DOMAIN`) sozlangan bo'lishi shart — host va join havolalari
+  shundan hosil bo'ladi.
+- Real-time uchun oddiy **polling** ishlatilgan — qo'shimcha kutubxona/servis shart emas,
+  bepul xostinglarda ham ishlaydi.
+- Bot hozircha **polling** rejimida. Doim-tirik bepul xosting uchun keyinchalik **webhook**'ga
+  o'tkazish tavsiya etiladi (ixtiyoriy, alohida qadam).
