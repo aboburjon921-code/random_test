@@ -1,4 +1,4 @@
-
+"""Telegram bot (tugmali menyu). Test yaratish, web-oyna orqali yechish, jonli panel."""
 import os, asyncio, logging
 
 from telegram import (Update, InlineKeyboardButton, InlineKeyboardMarkup,
@@ -110,6 +110,7 @@ async def on_kind(update, ctx):
     ctx.user_data["bases"] = {b["id"]: {"name": b["name"], "n": b["n"]} for b in bases}
     ctx.user_data["topics"] = {b["id"]: 0 for b in bases}
     ctx.user_data["tpage"] = 0
+    ctx.user_data["flow"] = "homework"
     await q.edit_message_text("📚 Har mavzudan nechta savol? ➕ / ➖ bilan sozlang:",
                               reply_markup=_topics_kb(ctx))
 
@@ -177,6 +178,11 @@ async def on_topic_done(update, ctx):
     spec = [(bid, cnt) for bid, cnt in topics.items() if cnt > 0]
     if not spec:
         return await q.answer("Kamida bitta mavzuga son bering.", show_alert=True)
+    if ctx.user_data.get("flow") == "live":
+        ctx.user_data["live_spec"] = spec
+        ctx.user_data["live"] = {"count": sum(c for _, c in spec)}
+        return await q.edit_message_text("⏱ Har bir savolga necha soniya vaqt berilsin?",
+                                         reply_markup=_live_time_kb())
     ctx.user_data["nt"] = {"topics": spec, "count": sum(c for _, c in spec)}
     await ask_mode(q)
 
@@ -461,10 +467,29 @@ async def start_live(update, ctx):
     if not BASE_URL:
         return await update.message.reply_text("⚠️ Server manzili sozlanmagan (BASE_URL). Jonli o'yin ishlamaydi.",
                                                reply_markup=menu())
-    ctx.user_data.pop("live", None)
+    ctx.user_data.pop("live", None); ctx.user_data.pop("live_spec", None)
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🎲 Aralash (barchasidan)", callback_data="lkind:mix")],
+        [InlineKeyboardButton("📚 Mavzu bo'yicha", callback_data="lkind:topic")]])
     await update.message.reply_text(
-        f"🎮 <b>Jonli o'yin</b> (Kahoot uslubi)\n\nBazada {total} ta savol. Nechta savol o'ynaymiz?",
-        parse_mode="HTML", reply_markup=_live_count_kb(total))
+        "🎮 <b>Jonli o'yin</b> (Kahoot uslubi)\n\nSavollar qanday tanlansin?",
+        parse_mode="HTML", reply_markup=kb)
+
+async def on_live_kind(update, ctx):
+    q = update.callback_query; await q.answer()
+    uid = q.from_user.id
+    kind = q.data.split(":")[1]
+    if kind == "mix":
+        total = db.question_count(uid)
+        return await q.edit_message_text(f"Bazada {total} ta savol. Nechta savol o'ynaymiz?",
+                                         reply_markup=_live_count_kb(total))
+    bases = db.base_list(uid)
+    ctx.user_data["bases"] = {b["id"]: {"name": b["name"], "n": b["n"]} for b in bases}
+    ctx.user_data["topics"] = {b["id"]: 0 for b in bases}
+    ctx.user_data["tpage"] = 0
+    ctx.user_data["flow"] = "live"
+    await q.edit_message_text("📚 Har mavzudan nechta savol? ➕ / ➖ bilan sozlang:",
+                              reply_markup=_topics_kb(ctx))
 
 async def on_live_count(update, ctx):
     q = update.callback_query; await q.answer()
@@ -487,11 +512,14 @@ async def on_live_time(update, ctx):
 async def _create_live(update, ctx, secs):
     uid = update.effective_user.id
     secs = max(5, min(secs, 120))
-    count = ctx.user_data.get("live", {}).get("count", 10)
-    total = db.question_count(uid)
-    count = max(1, min(count, total))
-    title = f"Jonli o'yin ({count} ta)"
-    pin, tok, n = await asyncio.to_thread(db.create_live_pick, uid, title, count, secs, None)
+    spec = ctx.user_data.get("live_spec")
+    if spec:
+        pin, tok, n = await asyncio.to_thread(db.create_live_topics, uid, "Jonli o'yin (mavzu)", spec, secs)
+    else:
+        count = ctx.user_data.get("live", {}).get("count", 10)
+        total = db.question_count(uid)
+        count = max(1, min(count, total))
+        pin, tok, n = await asyncio.to_thread(db.create_live_pick, uid, f"Jonli o'yin ({count} ta)", count, secs, None)
     if not pin:
         return await update.effective_message.reply_text("Savol topilmadi.", reply_markup=menu())
     host_url = f"{BASE_URL}/host/{pin}/{tok}"
@@ -504,7 +532,7 @@ async def _create_live(update, ctx, secs):
            f"      sahifaga kirib PIN <b>{pin}</b> va ismini yozadi.")
     rows = [[InlineKeyboardButton("🖥 Host ekranini ochish", web_app=WebAppInfo(url=host_url))]]
     await update.effective_message.reply_html(txt, reply_markup=InlineKeyboardMarkup(rows))
-    ctx.user_data.pop("live", None)
+    ctx.user_data.pop("live", None); ctx.user_data.pop("live_spec", None); ctx.user_data.pop("flow", None)
 
 
 def build_app():
@@ -526,6 +554,7 @@ def build_app():
     app.add_handler(CallbackQueryHandler(on_test_delete_confirm, pattern=r"^(tdelyes:|tdelno$)"))
     app.add_handler(CallbackQueryHandler(on_begin, pattern=r"^begin:"))
     app.add_handler(CommandHandler("live", start_live))
+    app.add_handler(CallbackQueryHandler(on_live_kind, pattern=r"^lkind:"))
     app.add_handler(CallbackQueryHandler(on_live_count, pattern=r"^lcnt:"))
     app.add_handler(CallbackQueryHandler(on_live_time, pattern=r"^lt:"))
     app.add_handler(MessageHandler(filters.Document.ALL, on_document))
