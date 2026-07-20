@@ -1276,7 +1276,7 @@ def _host_html(pin, host_token):
 const CFG=__CFG__;
 const SHAPES=['▲','◆','●','■'], COLORS=['red','blue','yellow','green'];
 const STATES=['lobby','question','reveal','scoreboard','ended'];
-let last=null, autoReveal=false, confDone=false, qrDone=false;
+let last=null, autoReveal=false, confDone=false, qrDone=false, curKey=null, lastPlayers=-1;
 
 async function poll(){
   try{
@@ -1302,76 +1302,86 @@ function setDots(i){const el=document.getElementById('dots');el.innerHTML='';
   for(let k=0;k<5;k++){const d=document.createElement('div');d.className='d'+(k===i?' on':'');el.appendChild(d);}}
 function typeset(){if(window.MathJax&&MathJax.typesetPromise)MathJax.typesetPromise([document.getElementById('stage')]).catch(()=>{});}
 
+function keyOf(d){return (d.state==='question'||d.state==='reveal')?d.state+':'+d.idx:d.state;}
 function render(d){
-  if(d.error)return;
-  last=d; const st=document.getElementById('stage'); const s=d.state;
-  document.getElementById('qbadge').textContent = (s==='question'||s==='reveal')?('Savol '+d.q_number+'/'+d.total):
-     (s==='lobby'?'Lobby':(s==='ended'?'Yakun':'Reyting'));
+  if(d.error)return; last=d;
+  const s=d.state, st=document.getElementById('stage');
+  document.getElementById('qbadge').textContent=(s==='question'||s==='reveal')?('Savol '+d.q_number+'/'+d.total):(s==='lobby'?'Lobby':(s==='ended'?'Yakun':'Reyting'));
   setDots(STATES.indexOf(s));
-  const pb=document.getElementById('primary');
-  pb.style.display='';
+  const pb=document.getElementById('primary'); pb.style.display='';
   if(s==='lobby'){pb.textContent=(d.players_n>0?'Boshlash ▶':'O\\'quvchilarni kuting…');pb.disabled=d.players_n===0;}
   else if(s==='question'){pb.textContent='Javobni ochish ▶';pb.disabled=false;}
   else if(s==='reveal'){pb.textContent='Reyting ▶';pb.disabled=false;}
   else if(s==='scoreboard'){pb.textContent=(d.idx+1<d.total)?'Keyingi savol ▶':'Yakuniy natija 🏆';pb.disabled=false;}
   else{pb.style.display='none';}
-
-  if(s==='lobby')renderLobby(d,st);
-  else if(s==='question')renderQuestion(d,st);
-  else if(s==='reveal')renderReveal(d,st);
-  else if(s==='scoreboard')renderBoard(d,st);
-  else if(s==='ended')renderPodium(d,st);
+  const k=keyOf(d);
+  if(k!==curKey){curKey=k; lastPlayers=-1; if(s!=='ended')confDone=false; buildScene(d,st);}
+  updateScene(d,st);
 }
-
-function renderLobby(d,st){
-  const url=CFG.joinurl;
-  const qrurl=CFG.joinurl+'?pin='+d.pin;
-  const chips=(d.players||[]).map(p=>'<div class="chip"><span class="av">'+p.avatar+'</span>'+esc(p.name)+'</div>').join('');
+function buildScene(d,st){const s=d.state;
+  if(s==='lobby')buildLobby(d,st);
+  else if(s==='question')buildQuestion(d,st);
+  else if(s==='reveal')buildReveal(d,st);
+  else if(s==='scoreboard')buildBoard(d,st);
+  else if(s==='ended')buildPodium(d,st);}
+function updateScene(d,st){const s=d.state;
+  if(s==='lobby'){
+    const c=document.getElementById('pcount'); if(c)c.textContent=d.players_n;
+    if(d.players_n!==lastPlayers){lastPlayers=d.players_n;
+      const box=document.getElementById('players');
+      if(box){const chips=(d.players||[]).map(p=>'<div class="chip"><span class="av">'+p.avatar+'</span>'+esc(p.name)+'</div>').join('');
+        box.innerHTML=chips||'<div class="empty">Birinchi o\\'quvchini kutmoqdamiz…</div>';}}
+  }else if(s==='question'){
+    const per=d.per_q_time||20, rem=d.remaining!=null?d.remaining:per, C=150.8, off=C*(1-rem/per);
+    const ring=document.getElementById('ringc'), rt=document.getElementById('ringtxt'), ac=document.getElementById('anscount');
+    if(ring){ring.style.strokeDashoffset=off; ring.style.stroke=rem<=5?'#ef4444':(rem<=10?'#f59e0b':'#6c63ff');}
+    if(rt)rt.textContent=rem; if(ac)ac.textContent=d.answered;
+    if(rem<=0 && !autoReveal){autoReveal=true;act('reveal');}
+  }}
+function buildLobby(d,st){
+  const url=CFG.joinurl, qrurl=CFG.joinurl+'?pin='+d.pin;
   st.innerHTML=
    '<div class="pincard"><div><div class="lab">Qo\\'shilish uchun</div>'+
    '<div class="pin">'+d.pin.replace(/(\\d{3})(\\d{3})/,'$1 $2')+'</div>'+
    '<div class="join">'+esc(url.replace(/^https?:\\/\\//,''))+'</div></div><div id="qr"></div></div>'+
-   '<div class="cnt"><b>'+d.players_n+'</b> o\\'quvchi qo\\'shildi</div>'+
-   '<div class="players">'+(chips||'<div class="empty">Birinchi o\\'quvchini kutmoqdamiz…</div>')+'</div>';
-  if(!qrDone){try{new QRCode(document.getElementById('qr'),{text:qrurl,width:104,height:104,correctLevel:QRCode.CorrectLevel.M});qrDone=true;}catch(e){}}
+   '<div class="cnt"><b id="pcount">'+d.players_n+'</b> o\\'quvchi qo\\'shildi</div>'+
+   '<div class="players" id="players"></div>';
+  try{new QRCode(document.getElementById('qr'),{text:qrurl,width:104,height:104,correctLevel:QRCode.CorrectLevel.M});}catch(e){}
 }
-
 function optTile(html,i,cls,mark){
   return '<div class="opt '+COLORS[i]+(cls||'')+'"><span class="shp">'+SHAPES[i]+'</span><span>'+html+'</span>'+(mark?'<span class="mk">'+mark+'</span>':'')+'</div>';
 }
-function renderQuestion(d,st){
-  const n=d.n_opts||4;
-  let opts='';for(let i=0;i<n;i++)opts+=optTile(d.opts_html[i],i,'','');
-  const per=d.per_q_time||20, rem=d.remaining!=null?d.remaining:per;
-  const C=150.8, off=C*(1-rem/per);
+function buildQuestion(d,st){
+  autoReveal=false;
+  const n=d.n_opts||4; let opts=''; for(let i=0;i<n;i++)opts+=optTile(d.opts_html[i],i,'','');
+  const per=d.per_q_time||20, rem=d.remaining!=null?d.remaining:per, C=150.8, off=C*(1-rem/per);
   const col=rem<=5?'#ef4444':(rem<=10?'#f59e0b':'#6c63ff');
   st.innerHTML=
    '<div class="qhead"><div class="qbadge">Savol '+d.q_number+'/'+d.total+'</div>'+
    '<div class="ring-wrap"><svg width="72" height="72"><circle cx="36" cy="36" r="24" fill="none" stroke="rgba(255,255,255,.12)" stroke-width="6"/>'+
-   '<circle cx="36" cy="36" r="24" fill="none" stroke="'+col+'" stroke-width="6" stroke-linecap="round" stroke-dasharray="150.8" stroke-dashoffset="'+off+'" style="transition:stroke-dashoffset 1s linear,stroke .5s"/></svg>'+
-   '<div class="ring-txt">'+rem+'</div></div>'+
-   '<div class="alive"><b>'+d.answered+'</b>javob</div></div>'+
+   '<circle id="ringc" cx="36" cy="36" r="24" fill="none" stroke="'+col+'" stroke-width="6" stroke-linecap="round" stroke-dasharray="150.8" stroke-dashoffset="'+off+'" style="transition:stroke-dashoffset 1s linear,stroke .5s"/></svg>'+
+   '<div class="ring-txt" id="ringtxt">'+rem+'</div></div>'+
+   '<div class="alive"><b id="anscount">'+d.answered+'</b>javob</div></div>'+
    '<div class="qtext">'+d.q_html+'</div><div class="opts">'+opts+'</div>';
   typeset();
-  if(rem<=0 && !autoReveal){autoReveal=true;act('reveal');}
 }
-function renderReveal(d,st){
+function buildReveal(d,st){
   const n=d.n_opts||4, cor=d.correct, mx=Math.max(1,...d.counts);
-  let bars='';for(let i=0;i<n;i++){const h=Math.round(d.counts[i]/mx*100);
+  let bars=''; for(let i=0;i<n;i++){const h=Math.round(d.counts[i]/mx*100);
     bars+='<div class="bar '+COLORS[i]+'"><div class="fill" data-h="'+h+'">'+d.counts[i]+'</div><div class="s">'+SHAPES[i]+'</div></div>';}
-  let opts='';for(let i=0;i<n;i++)opts+=optTile(d.opts_html[i],i,i===cor?' win':' dim',i===cor?'✓':'✕');
+  let opts=''; for(let i=0;i<n;i++)opts+=optTile(d.opts_html[i],i,i===cor?' win':' dim',i===cor?'✓':'✕');
   st.innerHTML='<div class="rev-h">To\\'g\\'ri javob: <b>'+SHAPES[cor]+'</b></div>'+
    '<div class="bars">'+bars+'</div><div class="opts">'+opts+'</div>';
   typeset();
   requestAnimationFrame(()=>{st.querySelectorAll('.fill').forEach(f=>f.style.height=f.dataset.h+'%');});
 }
-function renderBoard(d,st){
+function buildBoard(d,st){
   const rows=(d.scoreboard||[]).map((p,i)=>
    '<div class="row" style="animation-delay:'+(i*.06)+'s"><div class="rk">'+(i+1)+'</div>'+
    '<div class="av">'+p.avatar+'</div><div class="nm">'+esc(p.name)+'</div><div class="sc">'+p.score+'</div></div>').join('');
   st.innerHTML='<div class="btitle">🏆 Reyting</div>'+(rows||'<div class="empty">—</div>');
 }
-function renderPodium(d,st){
+function buildPodium(d,st){
   const p=d.podium||[]; const slot=(x,cls,pos)=> x?
    '<div class="pod '+cls+'"><div class="av">'+x.avatar+'</div><div class="pil"><div class="med">'+pos+'</div>'+
    '<div class="nm">'+esc(x.name)+'</div><div class="sc">'+x.score+'</div></div></div>':'';
