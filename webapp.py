@@ -1193,6 +1193,8 @@ def _host_html(pin, host_token):
 .brand .dot{width:34px;height:34px;border-radius:10px;background:linear-gradient(135deg,var(--neon),var(--neon2));display:grid;place-items:center;font-size:18px}
 .brand b{background:linear-gradient(135deg,#c4b5fd,#f0abfc);-webkit-background-clip:text;background-clip:text;color:transparent}
 .qbadge{font-size:14px;font-weight:800;color:#c4b5fd;background:rgba(108,99,255,.16);border:1px solid rgba(108,99,255,.3);padding:6px 14px;border-radius:99px}
+.fsbtn{font-family:inherit;font-weight:800;font-size:14px;color:#c4b5fd;background:var(--glass);border:1px solid var(--gb);padding:6px 14px;border-radius:99px;cursor:pointer}
+.fsbtn:hover{background:rgba(108,99,255,.16)}
 .stage{flex:1;background:linear-gradient(160deg,#0c0d20,#131638);border:1px solid var(--gb);border-radius:20px;padding:26px;display:flex;flex-direction:column;position:relative;overflow:hidden}
 /* lobby */
 .pincard{background:#fff;color:#111;border-radius:16px;padding:16px 22px;display:flex;align-items:center;gap:22px;align-self:center;margin-bottom:16px;box-shadow:0 10px 30px rgba(0,0,0,.4)}
@@ -1256,7 +1258,10 @@ def _host_html(pin, host_token):
 <div class="wrap">
   <div class="top">
     <div class="brand"><span class="dot">⚡</span>Jonli <b>Test!</b></div>
-    <div class="qbadge" id="qbadge">Lobby</div>
+    <div style="display:flex;align-items:center;gap:10px">
+      <button class="fsbtn" id="fsbtn" onclick="toggleFs()" title="To'liq ekran (F)">⛶ To'liq ekran</button>
+      <div class="qbadge" id="qbadge">Lobby</div>
+    </div>
   </div>
   <div class="stage" id="stage"><div class="empty">Yuklanmoqda…</div></div>
 </div>
@@ -1376,6 +1381,20 @@ function confetti(st){const cols=['#f5b301','#6c63ff','#e21b3c','#26890c','#1368
     c.style.left=Math.random()*100+'%';c.style.background=cols[i%cols.length];
     c.style.animation='drop '+(1.8+Math.random()*1.6)+'s linear '+(Math.random()*.6)+'s forwards';st.appendChild(c);}}
 function esc(s){return (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+
+function toggleFs(){
+  const d=document, el=d.documentElement;
+  if(!d.fullscreenElement && !d.webkitFullscreenElement){
+    (el.requestFullscreen||el.webkitRequestFullscreen||function(){}).call(el);
+  }else{
+    (d.exitFullscreen||d.webkitExitFullscreen||function(){}).call(d);
+  }
+}
+function syncFs(){const on=document.fullscreenElement||document.webkitFullscreenElement;
+  const b=document.getElementById('fsbtn');if(b)b.textContent=on?'⤡ Chiqish':'⛶ To\\'liq ekran';}
+document.addEventListener('fullscreenchange',syncFs);
+document.addEventListener('webkitfullscreenchange',syncFs);
+document.addEventListener('keydown',e=>{if((e.key==='f'||e.key==='F')&&!e.metaKey&&!e.ctrlKey)toggleFs();});
 
 CFG.joinurl=location.origin+'/join';
 poll();setInterval(poll,1000);
