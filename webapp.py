@@ -1,3 +1,4 @@
+"""FastAPI web-server: premium dizayn — o'quvchi test oynasi va o'qituvchi paneli."""
 import time, html, json, base64
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -745,7 +746,9 @@ def review_page(token: str):
 .opt-lbl {{ flex-shrink:0; width:30px; height:30px; border-radius:8px; border:1.5px solid rgba(255,255,255,.15); display:flex; align-items:center; justify-content:center; font-weight:800; font-size:13px; }}
 .opt-correct .opt-lbl {{ background:rgba(16,185,129,.3); border-color:var(--green); }}
 .opt-wrong .opt-lbl {{ background:rgba(239,68,68,.3); border-color:var(--red); }}
-.otext {{ flex:1; }}
+.otext {{ flex:1; min-width:0; overflow-wrap:anywhere; word-break:break-word; }}
+.otext mjx-container {{ max-width:100%; overflow-x:auto; overflow-y:hidden; }}
+.otext img {{ max-width:100%; height:auto; }}
 </style>
 </head><body>
 <div class="header">
