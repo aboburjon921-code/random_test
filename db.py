@@ -1,4 +1,4 @@
-
+"""SQLite ombori: bazalar, savollar, testlar, web-sessiyalar, jonli natijalar."""
 import sqlite3, json, os, random, string, time, threading
 
 DB_PATH = os.environ.get("DB_PATH", "data.db")
@@ -37,15 +37,18 @@ def init():
         code TEXT, token TEXT, student_id INTEGER, student_name TEXT, avatar TEXT,
         order_json TEXT, live TEXT, score INTEGER, total INTEGER,
         status TEXT, started_at REAL, deadline REAL, finished_at REAL);
-
-    -- Indekslar: tez qidirish uchun
-    CREATE INDEX IF NOT EXISTS idx_questions_owner   ON questions(owner_id);
-    CREATE INDEX IF NOT EXISTS idx_questions_base    ON questions(owner_id, base_id);
-    CREATE INDEX IF NOT EXISTS idx_tests_owner       ON tests(owner_id, created_at);
-    CREATE INDEX IF NOT EXISTS idx_sessions_code     ON sessions(code);
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token);
-    CREATE INDEX IF NOT EXISTS idx_sessions_student  ON sessions(code, student_id);
-    CREATE INDEX IF NOT EXISTS idx_sessions_deadline ON sessions(status, deadline);
+    CREATE TABLE IF NOT EXISTS games(pin TEXT PRIMARY KEY,
+        owner_id INTEGER, title TEXT, question_ids TEXT, host_token TEXT,
+        state TEXT DEFAULT 'lobby', current_idx INTEGER DEFAULT -1,
+        q_started_at REAL DEFAULT 0, per_q_time INTEGER DEFAULT 20, created_at REAL);
+    CREATE TABLE IF NOT EXISTS gplayers(id INTEGER PRIMARY KEY AUTOINCREMENT,
+        pin TEXT, name TEXT, token TEXT, avatar TEXT,
+        score INTEGER DEFAULT 0, streak INTEGER DEFAULT 0, joined_at REAL);
+    CREATE TABLE IF NOT EXISTS ganswers(id INTEGER PRIMARY KEY AUTOINCREMENT,
+        pin TEXT, q_idx INTEGER, player_id INTEGER, choice INTEGER,
+        correct INTEGER, points INTEGER, elapsed REAL, answered_at REAL);
+    CREATE INDEX IF NOT EXISTS ix_gplayers_pin ON gplayers(pin);
+    CREATE INDEX IF NOT EXISTS ix_ganswers_pin ON ganswers(pin, q_idx);
     """)
     for col, ddl in [("stem_xml", "ALTER TABLE questions ADD COLUMN stem_xml TEXT DEFAULT '[]'")]:
         if col not in _cols("questions"):
@@ -341,3 +344,224 @@ def panel_data(code):
             "total_students": len(students), "hardest": hardest,
             "closed": bool(test.get("closed")),
             "q_total": len(test["question_ids"])}
+
+
+# ─────────────────────────────────────────────
+#  JONLI O'YIN (Kahoot uslubi)
+# ─────────────────────────────────────────────
+POINT_BASE = 1000          # to'g'ri javob uchun maksimal ball
+STREAK_STEP = 100          # ketma-ket to'g'ri javob bonusi (har biriga)
+STREAK_MAX = 5             # bonus soni cheklovi (maks +500)
+LATE_GRACE = 1.5           # taymer tugagach qabul qilinadigan qo'shimcha soniya
+
+def _pin(n=6):
+    while True:
+        p = "".join(random.choice(string.digits) for _ in range(n))
+        if not conn().execute("SELECT 1 FROM games WHERE pin=? AND state!='ended'", (p,)).fetchone():
+            return p
+
+def create_live_game(owner_id, title, question_ids, per_q_time=20):
+    if not question_ids:
+        return None, None
+    pin = _pin(); tok = _tok()
+    conn().execute(
+        "INSERT INTO games(pin,owner_id,title,question_ids,host_token,state,current_idx,"
+        "q_started_at,per_q_time,created_at) VALUES(?,?,?,?,?,'lobby',-1,0,?,?)",
+        (pin, owner_id, title, json.dumps(question_ids), tok, int(per_q_time), time.time()))
+    conn().commit()
+    return pin, tok
+
+def create_live_pick(owner_id, title, count, per_q_time=20, base_ids=None):
+    """Egasining savollaridan tasodifiy 'count' ta olib jonli o'yin yaratadi."""
+    c = conn()
+    if base_ids:
+        q = "SELECT id FROM questions WHERE owner_id=? AND base_id IN (%s)" % ",".join("?" * len(base_ids))
+        rows = c.execute(q, (owner_id, *base_ids)).fetchall()
+    else:
+        rows = c.execute("SELECT id FROM questions WHERE owner_id=?", (owner_id,)).fetchall()
+    ids = [r["id"] for r in rows]
+    if not ids:
+        return None, None, 0
+    random.shuffle(ids); chosen = ids[:count]
+    pin, tok = create_live_game(owner_id, title, chosen, per_q_time)
+    return pin, tok, len(chosen)
+
+def get_game(pin):
+    row = conn().execute("SELECT * FROM games WHERE pin=?", (pin,)).fetchone()
+    if not row:
+        return None
+    d = dict(row); d["question_ids"] = json.loads(d["question_ids"]); return d
+
+def get_game_by_host(host_token):
+    row = conn().execute("SELECT * FROM games WHERE host_token=?", (host_token,)).fetchone()
+    if not row:
+        return None
+    d = dict(row); d["question_ids"] = json.loads(d["question_ids"]); return d
+
+def _game_question(g, idx):
+    if idx is None or idx < 0 or idx >= len(g["question_ids"]):
+        return None
+    return get_question(g["question_ids"][idx])
+
+def game_players(pin):
+    rows = conn().execute("SELECT name,avatar FROM gplayers WHERE pin=? ORDER BY id", (pin,)).fetchall()
+    return [dict(r) for r in rows]
+
+def _players_scored(pin):
+    rows = conn().execute(
+        "SELECT id,name,avatar,score,streak FROM gplayers WHERE pin=? ORDER BY score DESC, joined_at ASC",
+        (pin,)).fetchall()
+    return [dict(r) for r in rows]
+
+def join_game(pin, name):
+    g = get_game(pin)
+    if not g:
+        return {"error": "notfound"}
+    if g["state"] != "lobby":
+        return {"error": "started"}
+    name = (name or "").strip()[:20] or "O'quvchi"
+    existing = [r["name"] for r in conn().execute("SELECT name FROM gplayers WHERE pin=?", (pin,)).fetchall()]
+    base, k = name, 2
+    while name in existing:
+        name = f"{base}{k}"; k += 1
+    tok = _tok(); av = random.choice(AVATARS)
+    cur = conn().execute(
+        "INSERT INTO gplayers(pin,name,token,avatar,score,streak,joined_at) VALUES(?,?,?,?,0,0,?)",
+        (pin, name, tok, av, time.time()))
+    conn().commit()
+    return {"pin": pin, "player_id": cur.lastrowid, "token": tok, "name": name, "avatar": av}
+
+def _auth_player(pin, player_id, token):
+    row = conn().execute("SELECT * FROM gplayers WHERE id=? AND pin=? AND token=?",
+                         (player_id, pin, token)).fetchone()
+    return dict(row) if row else None
+
+def submit_answer(pin, player_id, token, choice):
+    g = get_game(pin)
+    if not g:
+        return {"ok": False, "reason": "gone"}
+    if not _auth_player(pin, player_id, token):
+        return {"ok": False, "reason": "auth"}
+    if g["state"] != "question":
+        return {"ok": False, "reason": "closed"}
+    idx = g["current_idx"]
+    ex = conn().execute("SELECT 1 FROM ganswers WHERE pin=? AND q_idx=? AND player_id=?",
+                        (pin, idx, player_id)).fetchone()
+    if ex:
+        return {"ok": True, "locked": True}
+    now = time.time(); elapsed = now - g["q_started_at"]; limit = max(1, g["per_q_time"])
+    if elapsed > limit + LATE_GRACE:
+        return {"ok": False, "reason": "late"}
+    q = _game_question(g, idx)
+    if not q:
+        return {"ok": False, "reason": "noq"}
+    try:
+        choice = int(choice)
+    except Exception:
+        return {"ok": False, "reason": "bad"}
+    is_ok = (choice == int(q["correct_index"]))
+    p = conn().execute("SELECT streak FROM gplayers WHERE id=?", (player_id,)).fetchone()
+    streak = p["streak"] if p else 0
+    pts = 0
+    if is_ok:
+        frac = min(max(elapsed, 0) / limit, 1.0)
+        pts = round(POINT_BASE * (1 - frac / 2))          # 1000 → 500
+        streak += 1
+        if streak >= 2:
+            pts += min(streak - 1, STREAK_MAX) * STREAK_STEP
+    else:
+        streak = 0
+    conn().execute(
+        "INSERT INTO ganswers(pin,q_idx,player_id,choice,correct,points,elapsed,answered_at)"
+        " VALUES(?,?,?,?,?,?,?,?)",
+        (pin, idx, player_id, choice, 1 if is_ok else 0, pts, elapsed, now))
+    conn().execute("UPDATE gplayers SET score=score+?, streak=? WHERE id=?", (pts, streak, player_id))
+    conn().commit()
+    return {"ok": True, "locked": True}
+
+def host_advance(host_token, action):
+    g = get_game_by_host(host_token)
+    if not g:
+        return None
+    pin, st, idx, n = g["pin"], g["state"], g["current_idx"], len(g["question_ids"])
+    c = conn()
+    if action == "start" and st == "lobby":
+        c.execute("UPDATE games SET state='question',current_idx=0,q_started_at=? WHERE pin=?",
+                  (time.time(), pin))
+    elif action == "reveal" and st == "question":
+        c.execute("UPDATE games SET state='reveal' WHERE pin=?", (pin,))
+    elif action == "scoreboard" and st in ("question", "reveal"):
+        c.execute("UPDATE games SET state='scoreboard' WHERE pin=?", (pin,))
+    elif action == "next" and st in ("scoreboard", "reveal"):
+        if idx + 1 < n:
+            c.execute("UPDATE games SET state='question',current_idx=?,q_started_at=? WHERE pin=?",
+                      (idx + 1, time.time(), pin))
+        else:
+            c.execute("UPDATE games SET state='ended' WHERE pin=?", (pin,))
+    elif action == "end":
+        c.execute("UPDATE games SET state='ended' WHERE pin=?", (pin,))
+    c.commit()
+    return host_state(pin)
+
+def _answer_counts(pin, idx):
+    counts = [0, 0, 0, 0]
+    for r in conn().execute("SELECT choice, COUNT(*) c FROM ganswers WHERE pin=? AND q_idx=? GROUP BY choice",
+                            (pin, idx)).fetchall():
+        if r["choice"] is not None and 0 <= r["choice"] < 4:
+            counts[r["choice"]] = r["c"]
+    return counts
+
+def host_state(pin):
+    g = get_game(pin)
+    if not g:
+        return None
+    st, idx, n = g["state"], g["current_idx"], len(g["question_ids"])
+    out = {"state": st, "idx": idx, "total": n, "pin": pin, "title": g["title"],
+           "per_q_time": g["per_q_time"], "players_n": len(game_players(pin))}
+    if st == "lobby":
+        out["players"] = game_players(pin)
+    if st in ("question", "reveal"):
+        q = _game_question(g, idx)
+        out["q_number"] = idx + 1
+        out["qid"] = q["id"] if q else None
+        out["correct"] = int(q["correct_index"]) if q else 0
+        out["n_opts"] = min(len(q["options"]), 4) if q else 4
+        out["counts"] = _answer_counts(pin, idx)
+        out["answered"] = sum(out["counts"])
+        out["remaining"] = max(0, int(g["q_started_at"] + g["per_q_time"] - time.time())) if st == "question" else 0
+    if st in ("scoreboard", "ended"):
+        out["scoreboard"] = _players_scored(pin)[:5]
+        out["podium"] = _players_scored(pin)[:3]
+    return out
+
+def player_state(pin, player_id, token):
+    g = get_game(pin)
+    if not g:
+        return {"state": "gone"}
+    p = _auth_player(pin, player_id, token)
+    if not p:
+        return {"state": "gone"}
+    st, idx = g["state"], g["current_idx"]
+    out = {"state": st, "idx": idx, "name": p["name"], "avatar": p["avatar"], "score": p["score"]}
+    if st == "question":
+        q = _game_question(g, idx)
+        out["n_opts"] = min(len(q["options"]), 4) if q else 4
+        out["remaining"] = max(0, int(g["q_started_at"] + g["per_q_time"] - time.time()))
+        a = conn().execute("SELECT choice FROM ganswers WHERE pin=? AND q_idx=? AND player_id=?",
+                           (pin, idx, player_id)).fetchone()
+        out["answered"] = a is not None
+        out["my_choice"] = a["choice"] if a else None
+    if st in ("reveal", "scoreboard", "ended"):
+        a = None
+        if idx is not None and idx >= 0:
+            a = conn().execute("SELECT choice,correct,points FROM ganswers WHERE pin=? AND q_idx=? AND player_id=?",
+                               (pin, idx, player_id)).fetchone()
+        out["answered"] = a is not None
+        out["correct"] = bool(a["correct"]) if a else False
+        out["points"] = a["points"] if a else 0
+        ranked = _players_scored(pin)
+        out["rank"] = next((i + 1 for i, r in enumerate(ranked) if r["id"] == player_id), None)
+        out["total_players"] = len(ranked)
+    if st == "ended":
+        out["podium"] = _players_scored(pin)[:3]
+    return out
