@@ -1,6 +1,6 @@
 """FastAPI web-server: premium dizayn — o'quvchi test oynasi va o'qituvchi paneli."""
 import time, html, json, base64
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, UploadFile, File
 from fastapi.responses import HTMLResponse, JSONResponse
 
 import db
@@ -1555,3 +1555,285 @@ function renderEnd(d){
 if(sess){startPoll();}else{showJoin('');}
 </script></body></html>"""
     return tpl.replace("__BASE__", _LIVE_BASE)
+
+
+# ═════════════════════════════════════════════════════════════════
+#  OMR SKANER (3-faza) — javob varag'ini suratdan o'qish
+# ═════════════════════════════════════════════════════════════════
+@app.post("/omr/api/scan")
+async def omr_scan(file: UploadFile = File(...)):
+    data = await file.read()
+    try:
+        import omr, omrscan
+    except Exception:
+        return JSONResponse({"ok": False, "reason": "engine"}, status_code=500)
+    try:
+        res = omrscan.scan(data, omr.MAX_Q)
+    except Exception:
+        return JSONResponse({"ok": False, "reason": "error"})
+    if not res.get("ok"):
+        return JSONResponse(res)
+    code = res.get("code")
+    pt = db.get_print_test(code) if code else None
+    if not pt:
+        return JSONResponse({"ok": False, "reason": "qr", "student_id": res.get("student_id")})
+    n = pt["n_questions"]
+    variant = res.get("variant") or 1
+    if variant < 1 or variant > pt["n_variants"]:
+        variant = 1
+    key = pt["keys"][variant - 1]
+    answers = res["answers"][:n]
+    ambiguous = [q for q in res["ambiguous"] if q <= n]
+    correct = sum(1 for i, k in enumerate(key) if i < len(answers) and answers[i] == k)
+    wrong = [i + 1 for i, k in enumerate(key) if not (i < len(answers) and answers[i] == k)]
+    sid = db.save_scan(code, variant, res["student_id"], correct, n, answers, wrong, ambiguous)
+    return JSONResponse({"ok": True, "scan_id": sid, "code": code, "variant": variant,
+                         "student_id": res["student_id"], "id_ambiguous": res.get("id_ambiguous"),
+                         "correct": correct, "total": n, "answers": answers,
+                         "wrong": wrong, "ambiguous": ambiguous})
+
+@app.post("/omr/api/confirm")
+async def omr_confirm(req: Request):
+    d = await req.json()
+    try:
+        r = db.update_scan_answers(int(d["scan_id"]), d["code"], int(d["variant"]), d["answers"])
+    except Exception:
+        r = None
+    if not r:
+        return JSONResponse({"ok": False}, status_code=400)
+    return JSONResponse({"ok": True, **r})
+
+@app.get("/omr/api/results")
+def omr_results(code: str):
+    return JSONResponse({"code": code, "results": db.scan_results(code)})
+
+@app.get("/scan", response_class=HTMLResponse)
+def scan_page():
+    return HTMLResponse(_scan_html())
+
+
+def _scan_html():
+    tpl = """<!DOCTYPE html><html lang="uz"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<title>Skaner</title><style>__BASE__
+.app{max-width:480px;margin:0 auto;min-height:100vh;padding:16px 14px 40px;display:flex;flex-direction:column}
+.brand{text-align:center;font-weight:900;font-size:24px;margin:8px 0 4px}
+.brand b{background:linear-gradient(135deg,#c4b5fd,#f0abfc);-webkit-background-clip:text;background-clip:text;color:transparent}
+.hint{text-align:center;color:var(--muted);font-size:13px;margin-bottom:14px;line-height:1.5}
+.snapbtn{display:block;background:linear-gradient(135deg,var(--neon),var(--neon2));color:#fff;font-weight:800;
+  font-size:18px;padding:18px;border-radius:16px;text-align:center;cursor:pointer;border:none;width:100%}
+#file{display:none}
+.card{background:var(--glass);border:1px solid var(--gb);border-radius:16px;padding:16px;margin-top:14px;animation:fade .3s}
+.rowb{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.sid{font-weight:900;font-size:20px}
+.sid small{color:var(--muted);font-weight:700;font-size:12px}
+.badge{font-weight:900;font-size:26px;padding:6px 16px;border-radius:12px}
+.good{background:rgba(38,137,12,.2);color:#4ade80}
+.mid{background:rgba(216,158,0,.2);color:#fbbf24}
+.bad{background:rgba(226,27,60,.18);color:#f87171}
+.meta{color:var(--muted);font-size:13px;margin-top:8px;font-weight:600}
+.warn{color:#fbbf24;font-size:13px;font-weight:700;margin-top:8px}
+.err{background:rgba(226,27,60,.14);border:1px solid rgba(226,27,60,.4);color:#fca5a5;border-radius:12px;padding:14px;margin-top:14px;text-align:center;font-weight:700}
+.fixer{margin-top:12px;border-top:1px dashed var(--gb);padding-top:10px}
+.fixq{display:flex;align-items:center;gap:6px;margin-bottom:7px;flex-wrap:wrap}
+.fixq .qn{font-weight:800;width:34px;font-size:13px}
+.opt{width:34px;height:34px;border-radius:8px;border:1px solid var(--gb);background:rgba(255,255,255,.05);
+  color:var(--text);font-weight:800;cursor:pointer;font-family:inherit}
+.opt.on{background:linear-gradient(135deg,var(--neon),var(--neon2));border-color:transparent}
+.savebtn{margin-top:6px;background:var(--glass);border:1px solid var(--gb);color:var(--text);font-weight:800;
+  padding:10px 16px;border-radius:10px;cursor:pointer;font-family:inherit;width:100%}
+.tally{margin-top:20px}
+.tally h3{font-size:13px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px}
+.trow{display:flex;justify-content:space-between;background:var(--glass);border:1px solid var(--gb);
+  border-radius:10px;padding:9px 13px;margin-bottom:6px;font-weight:700;font-size:14px}
+.spin{text-align:center;color:var(--muted);margin-top:16px;font-weight:700}
+</style></head><body>
+<div class="app">
+  <div class="brand">📷 Javob varag'i <b>skaneri</b></div>
+  <div class="hint">Varaqni yaxshi yorug'da, 4 burchagi ko'rinadigan qilib suratga oling.<br>Har varaq uchun tugmani bosing.</div>
+  <button class="snapbtn" onclick="document.getElementById('file').click()">📸 Varaqni suratga olish</button>
+  <input type="file" id="file" accept="image/*" capture="environment" onchange="upload(this)">
+  <div id="out"></div>
+  <div class="tally"><h3 id="tallyhdr" style="display:none">Skanerlandi</h3><div id="tally"></div></div>
+</div>
+<script>
+const L=['A','B','C','D']; let count=0, sumc=0, sumt=0;
+function up(v){return (v||'').toString();}
+async function upload(inp){
+  if(!inp.files||!inp.files[0])return;
+  const f=inp.files[0]; inp.value='';
+  document.getElementById('out').innerHTML='<div class="spin">⏳ O\\'qilmoqda…</div>';
+  const fd=new FormData(); fd.append('file',f);
+  try{
+    const r=await fetch('/omr/api/scan',{method:'POST',body:fd});
+    const d=await r.json(); render(d);
+  }catch(e){ document.getElementById('out').innerHTML='<div class="err">Tarmoq xatosi. Qayta urinib ko\\'ring.</div>'; }
+}
+function pct(c,t){return t?Math.round(c/t*100):0;}
+function render(d){
+  const out=document.getElementById('out');
+  if(!d.ok){
+    let m='O\\'qib bo\\'lmadi.';
+    if(d.reason==='anchors')m='Varaqning 4 burchagi to\\'liq ko\\'rinmadi. Tekis, yorug\\'da qayta oling.';
+    else if(d.reason==='qr')m='QR kod o\\'qilmadi yoki bu varaq tizimda yo\\'q.';
+    else if(d.reason==='engine')m='Skaner moduli serverda o\\'rnatilmagan (OpenCV).';
+    out.innerHTML='<div class="err">'+m+'</div>'; return;
+  }
+  const p=pct(d.correct,d.total);
+  const cls=p>=70?'good':(p>=40?'mid':'bad');
+  count++; sumc+=d.correct; sumt+=d.total;
+  let amb='';
+  if(d.ambiguous&&d.ambiguous.length){
+    amb='<div class="warn">⚠️ Shubhali/bo\\'sh: '+d.ambiguous.join(', ')+'-savol. Tekshiring:</div><div class="fixer" id="fix"></div>';
+  }
+  out.innerHTML=
+   '<div class="card" id="card">'+
+   '<div class="rowb"><div class="sid">ID: '+up(d.student_id)+' <small>V'+d.variant+(d.id_ambiguous?" · ID shubhali":"")+'</small></div>'+
+   '<div class="badge '+cls+'">'+d.correct+'/'+d.total+'</div></div>'+
+   '<div class="meta">To\\'g\\'ri: '+d.correct+' · Xato: '+(d.total-d.correct)+' · '+p+'%'+
+   (d.wrong&&d.wrong.length?' · Xato savollar: '+d.wrong.join(', '):'')+'</div>'+amb+'</div>';
+  if(d.ambiguous&&d.ambiguous.length) buildFixer(d);
+  // tally
+  document.getElementById('tallyhdr').style.display='';
+  const t=document.getElementById('tally');
+  const row=document.createElement('div'); row.className='trow';
+  row.innerHTML='<span>ID '+up(d.student_id)+' · V'+d.variant+'</span><span>'+d.correct+'/'+d.total+'</span>';
+  t.prepend(row);
+}
+function buildFixer(d){
+  const fix=document.getElementById('fix'); const ans=d.answers.slice();
+  d.ambiguous.forEach(q=>{
+    const row=document.createElement('div'); row.className='fixq';
+    row.innerHTML='<span class="qn">'+q+'.</span>';
+    L.concat(['—']).forEach((lab,oi)=>{
+      const b=document.createElement('button'); b.className='opt'; b.textContent=lab;
+      const val=oi<4?lab:null;
+      if(ans[q-1]===val)b.classList.add('on');
+      b.onclick=()=>{ans[q-1]=val; row.querySelectorAll('.opt').forEach(x=>x.classList.remove('on')); b.classList.add('on');};
+      row.appendChild(b);
+    });
+    fix.appendChild(row);
+  });
+  const sv=document.createElement('button'); sv.className='savebtn'; sv.textContent='💾 Tuzatib qayta hisoblash';
+  sv.onclick=async()=>{
+    sv.textContent='…';
+    try{
+      const r=await fetch('/omr/api/confirm',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({scan_id:d.scan_id,code:d.code,variant:d.variant,answers:ans})});
+      const nd=await r.json();
+      if(nd.ok){ d.correct=nd.correct; d.total=nd.total; d.wrong=nd.wrong; d.ambiguous=[]; render(d); }
+      else sv.textContent='Xato';
+    }catch(e){ sv.textContent='Xato'; }
+  };
+  fix.appendChild(sv);
+}
+</script></body></html>"""
+    return tpl.replace("__BASE__", _LIVE_BASE)
+
+
+# ═════════════════════════════════════════════════════════════════
+#  SKANER NATIJALARI PANELI (4-faza)
+# ═════════════════════════════════════════════════════════════════
+@app.get("/omr/api/report")
+def omr_report(code: str):
+    rep = db.scan_report(code)
+    if not rep:
+        return JSONResponse({"error": "notfound"}, status_code=404)
+    return JSONResponse(rep)
+
+@app.get("/results/{code}.csv")
+def results_csv(code: str):
+    rep = db.scan_report(code)
+    if not rep:
+        return HTMLResponse("Topilmadi", status_code=404)
+    lines = ["ID,Variant,To'g'ri,Jami,Foiz,Xato savollar"]
+    for r in rep["rows"]:
+        wrong = " ".join(f"{w['q']}{w['marked']}({w['correct']})" for w in r["wrong"])
+        pct = round(r["correct"] / r["total"] * 100) if r["total"] else 0
+        lines.append(f"{r['student_id']},{r['variant']},{r['correct']},{r['total']},{pct},{wrong}")
+    from fastapi.responses import Response
+    csv = "\ufeff" + "\n".join(lines)      # BOM — Excel uchun
+    return Response(csv, media_type="text/csv",
+                    headers={"Content-Disposition": f'attachment; filename="natija_{code}.csv"'})
+
+@app.get("/results/{code}", response_class=HTMLResponse)
+def results_page(code: str):
+    return HTMLResponse(_results_html(code))
+
+
+def _results_html(code):
+    cfg = json.dumps({"code": code})
+    tpl = """<!DOCTYPE html><html lang="uz"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Natijalar</title><style>__BASE__
+.wrap{max-width:820px;margin:0 auto;padding:18px 14px 60px}
+.top{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:14px}
+.brand{font-weight:900;font-size:22px}.brand b{background:linear-gradient(135deg,#c4b5fd,#f0abfc);-webkit-background-clip:text;background-clip:text;color:transparent}
+.csv{background:var(--glass);border:1px solid var(--gb);color:var(--text);text-decoration:none;font-weight:800;font-size:13px;padding:8px 14px;border-radius:99px}
+.stats{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px}
+.stat{background:var(--glass);border:1px solid var(--gb);border-radius:12px;padding:10px 16px;flex:1;min-width:110px}
+.stat .v{font-weight:900;font-size:22px}.stat .l{color:var(--muted);font-size:12px;font-weight:700}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th{text-align:left;color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.5px;padding:8px 10px;border-bottom:1px solid var(--gb)}
+td{padding:10px;border-bottom:1px solid rgba(255,255,255,.06);vertical-align:top}
+tr:hover{background:rgba(255,255,255,.03)}
+.sid{font-weight:800}
+.score{font-weight:900;white-space:nowrap}
+.score .pct{color:var(--muted);font-weight:700;font-size:12px}
+.g{color:#4ade80}.m{color:#fbbf24}.b{color:#f87171}
+.chip{display:inline-block;background:rgba(226,27,60,.14);border:1px solid rgba(226,27,60,.3);color:#fca5a5;
+  border-radius:6px;padding:1px 7px;margin:2px 3px 2px 0;font-weight:700;font-size:12.5px;white-space:nowrap}
+.none{color:#4ade80;font-weight:700}
+.amb{color:#fbbf24;font-size:11px;font-weight:700}
+.empty{text-align:center;color:var(--muted);padding:40px;font-weight:700}
+.hard{margin-top:18px;color:var(--muted);font-size:13px}
+.hard b{color:#f87171}
+.live{font-size:12px;color:#4ade80;font-weight:700}
+</style></head><body>
+<div class="wrap">
+  <div class="top">
+    <div class="brand">📊 Natijalar <b>· __CODE__</b></div>
+    <a class="csv" href="/results/__CODE__.csv">⬇️ Excel (CSV)</a>
+  </div>
+  <div id="stats" class="stats"></div>
+  <div id="body"><div class="empty">Yuklanmoqda…</div></div>
+  <div id="hard" class="hard"></div>
+  <div class="live" id="live" style="margin-top:12px">🟢 Jonli yangilanmoqda…</div>
+</div>
+<script>
+const CFG=__CFG__;
+function esc(s){return (s||'').toString().replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
+function cls(p){return p>=70?'g':(p>=40?'m':'b');}
+async function load(){
+  try{
+    const r=await fetch('/omr/api/report?code='+encodeURIComponent(CFG.code));
+    if(!r.ok){document.getElementById('body').innerHTML='<div class="empty">Bunday test topilmadi.</div>';return;}
+    const d=await r.json(); render(d);
+  }catch(e){}
+}
+function render(d){
+  document.getElementById('stats').innerHTML=
+    '<div class="stat"><div class="v">'+d.count+'</div><div class="l">O\\'quvchi</div></div>'+
+    '<div class="stat"><div class="v">'+d.avg+'/'+d.n+'</div><div class="l">O\\'rtacha</div></div>'+
+    '<div class="stat"><div class="v">'+(d.n)+'</div><div class="l">Savol</div></div>';
+  if(!d.rows.length){document.getElementById('body').innerHTML='<div class="empty">Hali skaner qilinmagan.</div>';document.getElementById('hard').innerHTML='';return;}
+  let h='<table><thead><tr><th>ID</th><th>To\\'g\\'ri</th><th>Xato savollar (belgilagan/to\\'g\\'ri)</th></tr></thead><tbody>';
+  d.rows.forEach(r=>{
+    const p=r.total?Math.round(r.correct/r.total*100):0;
+    let wrong = r.wrong.length ? r.wrong.map(w=>'<span class="chip">'+w.q+esc(w.marked)+'('+esc(w.correct)+')</span>').join('')
+                               : '<span class="none">✓ hammasi to\\'g\\'ri</span>';
+    const amb = (r.ambiguous&&r.ambiguous.length)?' <span class="amb">⚠️'+r.ambiguous.length+'</span>':'';
+    h+='<tr><td class="sid">'+esc(r.student_id)+'<div class="amb" style="color:var(--muted);font-weight:600">V'+r.variant+amb+'</div></td>'+
+       '<td class="score '+cls(p)+'">'+r.correct+'/'+r.total+' <span class="pct">'+p+'%</span></td>'+
+       '<td>'+wrong+'</td></tr>';
+  });
+  h+='</tbody></table>';
+  document.getElementById('body').innerHTML=h;
+  if(d.hardest&&d.hardest.length){
+    document.getElementById('hard').innerHTML='🔻 Eng ko\\'p xato qilingan: '+
+      d.hardest.map(x=>'<b>'+x.q+'-savol</b> ('+x.miss+')').join(', ');
+  }else document.getElementById('hard').innerHTML='';
+}
+load(); setInterval(load,3000);
+</script></body></html>"""
+    return tpl.replace("__BASE__", _LIVE_BASE).replace("__CFG__", cfg).replace("__CODE__", code)
