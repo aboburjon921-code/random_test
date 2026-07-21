@@ -1,12 +1,13 @@
 """Telegram bot (tugmali menyu). Test yaratish, web-oyna orqali yechish, jonli panel."""
-import os, asyncio, logging
+import os, asyncio, logging, random
+from io import BytesIO
 
 from telegram import (Update, InlineKeyboardButton, InlineKeyboardMarkup,
                       ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove,
-                      WebAppInfo)
+                      WebAppInfo, InputFile)
 from telegram.ext import (Application, CommandHandler, MessageHandler,
                           CallbackQueryHandler, ContextTypes, filters)
-import db, parser
+import db, parser, docgen, omr
 
 log = logging.getLogger("bot")
 
@@ -23,6 +24,9 @@ TOPICS_PER_PAGE = 6             # mavzu tanlashda bir sahifadagi mavzular soni
 
 BTN_NEW = "➕ Yangi test"; BTN_BASES = "📚 Bazalarim"; BTN_RESULTS = "📊 Natijalar"
 BTN_CLEAR = "🗑 Bazani tozalash"; BTN_HELP = "ℹ️ Yordam"; BTN_LIVE = "🎮 Jonli o'yin"
+BTN_PRINT = "🖨 Chop etiladigan test"
+BTN_SCAN = "📷 Skaner"
+PRINT_VARIANTS = [1, 2, 3, 4]
 
 
 def is_admin(uid): return (not ADMIN_IDS) or (uid in ADMIN_IDS)
@@ -30,6 +34,7 @@ def is_admin(uid): return (not ADMIN_IDS) or (uid in ADMIN_IDS)
 def menu():
     return ReplyKeyboardMarkup(
         [[KeyboardButton(BTN_NEW), KeyboardButton(BTN_LIVE)],
+         [KeyboardButton(BTN_PRINT), KeyboardButton(BTN_SCAN)],
          [KeyboardButton(BTN_BASES), KeyboardButton(BTN_RESULTS)],
          [KeyboardButton(BTN_CLEAR), KeyboardButton(BTN_HELP)]], resize_keyboard=True)
 
@@ -39,6 +44,10 @@ HELP = ("ℹ️ <b>Qo'llanma</b>\n\n1️⃣ Word bazani (.docx) yuboring — <co
         "4️⃣ <b>📊 Natijalar</b> — jonli panel: kim yechyapti, ball, o'rtacha.\n\n"
         "🎮 <b>Jonli o'yin</b> — Kahoot uslubi: savol sizning ekraningizda, o'quvchilar "
         "telefonda rang tanlab javob beradi, oxirida top-3 podium.\n\n"
+        "🖨 <b>Chop etiladigan test</b> — random test (Word + PDF) yaratib beradi: toza, "
+        "javob panjarasisiz, bir yoki bir nechta variant + javob kaliti bilan.\n\n"
+        "📷 <b>Skaner</b> — o'quvchilar to'ldirgan javob varaqlarini telefonda suratga olib "
+        "avtomatik baholaydi (ID, ball, xato savollar).\n\n"
         "Formula, grek, indeks, rasm — web-oynada chiroyli ko'rinadi.")
 
 
@@ -183,6 +192,11 @@ async def on_topic_done(update, ctx):
         ctx.user_data["live"] = {"count": sum(c for _, c in spec)}
         return await q.edit_message_text("⏱ Har bir savolga necha soniya vaqt berilsin?",
                                          reply_markup=_live_time_kb())
+    if ctx.user_data.get("flow") == "print":
+        ctx.user_data["print_spec"] = spec
+        ctx.user_data["print_count"] = None
+        return await q.edit_message_text("🖨 Nechta variant tayyorlansin?",
+                                         reply_markup=_print_var_kb())
     ctx.user_data["nt"] = {"topics": spec, "count": sum(c for _, c in spec)}
     await ask_mode(q)
 
@@ -349,7 +363,15 @@ async def on_text(update, ctx):
         if text == BTN_RESULTS: return await show_results_list(update, ctx)
         if text == BTN_CLEAR: return await ask_clear(update, ctx)
         if text == BTN_LIVE: return await start_live(update, ctx)
+        if text == BTN_PRINT: return await start_print(update, ctx)
+        if text == BTN_SCAN: return await start_scan(update, ctx)
         if text == BTN_HELP: return await update.message.reply_html(HELP, reply_markup=menu())
+        if ctx.user_data.get("await_pcount"):
+            ctx.user_data["await_pcount"] = False
+            if not text.isdigit(): return await update.message.reply_text("Faqat son yuboring.")
+            ctx.user_data["print_count"] = int(text); ctx.user_data["print_spec"] = None
+            return await update.message.reply_text("🖨 Nechta variant tayyorlansin?",
+                                                   reply_markup=_print_var_kb())
         if ctx.user_data.get("await_lcount"):
             ctx.user_data["await_lcount"] = False
             if not text.isdigit(): return await update.message.reply_text("Faqat son yuboring.")
@@ -535,6 +557,161 @@ async def _create_live(update, ctx, secs):
     ctx.user_data.pop("live", None); ctx.user_data.pop("live_spec", None); ctx.user_data.pop("flow", None)
 
 
+# ─────────────────────────────────────────────
+#  CHOP ETILADIGAN TEST (Word + PDF) — 1-faza
+# ─────────────────────────────────────────────
+def _print_count_kb(total):
+    btns = [InlineKeyboardButton(f"{n} ta", callback_data=f"pcnt:{n}") for n in COUNTS if n <= total]
+    rows = [btns[i:i+3] for i in range(0, len(btns), 3)] if btns else []
+    rows.append([InlineKeyboardButton(f"✅ Barchasi ({total})", callback_data=f"pcnt:{total}"),
+                 InlineKeyboardButton("✏️ Boshqa", callback_data="pcnt:custom")])
+    return InlineKeyboardMarkup(rows)
+
+def _print_var_kb():
+    return InlineKeyboardMarkup([[InlineKeyboardButton(
+        ("1 variant" if v == 1 else f"{v} variant"), callback_data=f"pvar:{v}") for v in PRINT_VARIANTS]])
+
+async def start_print(update, ctx):
+    uid = update.effective_user.id
+    total = db.question_count(uid)
+    if total == 0:
+        return await update.message.reply_text("Avval Word baza (.docx) yuboring.", reply_markup=menu())
+    ctx.user_data.pop("print_spec", None); ctx.user_data.pop("print_count", None)
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🎲 Aralash (barchasidan)", callback_data="pkind:mix")],
+        [InlineKeyboardButton("📚 Mavzu bo'yicha", callback_data="pkind:topic")]])
+    await update.message.reply_text(
+        "🖨 <b>Chop etiladigan test</b>\n\nSavollar qanday tanlansin?",
+        parse_mode="HTML", reply_markup=kb)
+
+async def start_scan(update, ctx):
+    if not BASE_URL:
+        return await update.message.reply_text("⚠️ Server manzili (BASE_URL) sozlanmagan.", reply_markup=menu())
+    url = f"{BASE_URL}/scan"
+    txt = ("📷 <b>Skaner</b>\n\nQuyidagi tugma orqali telefon brauzerida oching va "
+           "javob varaqlarini birma-bir suratga oling — natija darhol chiqadi.\n\n"
+           "Yaxshi yorug'lik, varaqning 4 burchagi ko'rinsin.")
+    rows = [[InlineKeyboardButton("📷 Skanerni ochish", url=url)]]
+    await update.message.reply_html(txt, reply_markup=InlineKeyboardMarkup(rows))
+
+async def cmd_natija(update, ctx):
+    if not BASE_URL:
+        return await update.message.reply_text("⚠️ Server manzili (BASE_URL) sozlanmagan.")
+    args = (ctx.args if hasattr(ctx, "args") else [])
+    if not args:
+        return await update.message.reply_html(
+            "Foydalanish: <code>/natija KOD</code>\n(KOD — chop etilgan test kodi).")
+    code = args[0].strip().upper()
+    pt = db.get_print_test(code)
+    if not pt:
+        return await update.message.reply_text("Bunday kod topilmadi.")
+    url = f"{BASE_URL}/results/{code}"
+    rows = [[InlineKeyboardButton("📊 Natijalarni ochish", url=url)]]
+    await update.message.reply_html(
+        f"📊 <b>{pt['title']}</b> · kod <code>{code}</code>\n{url}",
+        reply_markup=InlineKeyboardMarkup(rows))
+
+async def on_print_kind(update, ctx):
+    q = update.callback_query; await q.answer()
+    uid = q.from_user.id
+    if q.data.split(":")[1] == "mix":
+        total = db.question_count(uid)
+        return await q.edit_message_text("Nechta savol bo'lsin?", reply_markup=_print_count_kb(total))
+    bases = db.base_list(uid)
+    ctx.user_data["bases"] = {b["id"]: {"name": b["name"], "n": b["n"]} for b in bases}
+    ctx.user_data["topics"] = {b["id"]: 0 for b in bases}
+    ctx.user_data["tpage"] = 0
+    ctx.user_data["flow"] = "print"
+    await q.edit_message_text("📚 Har mavzudan nechta savol? ➕ / ➖ bilan sozlang:",
+                              reply_markup=_topics_kb(ctx))
+
+async def on_print_count(update, ctx):
+    q = update.callback_query; await q.answer()
+    val = q.data.split(":")[1]
+    if val == "custom":
+        ctx.user_data["await_pcount"] = True
+        return await q.edit_message_text("✏️ Nechta savol? Sonini yozing:")
+    ctx.user_data["print_count"] = int(val); ctx.user_data["print_spec"] = None
+    await q.edit_message_text("🖨 Nechta variant tayyorlansin?", reply_markup=_print_var_kb())
+
+async def on_print_var(update, ctx):
+    q = update.callback_query; await q.answer()
+    n = int(q.data.split(":")[1])
+    await _gen_and_send_print(update, ctx, n)
+
+def _build_print(uid, title, count, spec, n_variants):
+    ids = db.pick_ids(uid, count=count, spec=spec)
+    questions = [x for x in (db.get_question(i) for i in ids) if x]
+    if not questions:
+        return None
+    n_q = len(questions)
+    docxs, pdfs, keys = [], [], []
+    for v in range(n_variants):
+        order = list(questions); random.shuffle(order)
+        vtitle = title if n_variants == 1 else f"{title} · Variant {v+1}"
+        docx, key = docgen.build_test_docx(order, title=vtitle, shuffle_opts=True,
+                                           get_media=db.get_media, seed=random.random())
+        docxs.append(docx); keys.append(key)
+        pdfs.append(docgen.docx_to_pdf(docx))
+    code = db.save_print_test(uid, title, keys)
+    sheets = [omr.build_answer_sheet_pdf(code, vi + 1, n_q, title=title, total=n_q)
+              for vi in range(n_variants)]
+
+    pdf_ok = all(pdfs)
+    test_pdf = docgen.merge_pdfs(pdfs, pad_even=True) if pdf_ok else None   # har variant juft bet
+    sheet_pdf = docgen.merge_pdfs(sheets, pad_even=False)                    # varaqlar birma-bir
+    return {"code": code, "n_q": n_q, "keys": keys, "docxs": docxs,
+            "test_pdf": test_pdf, "sheet_pdf": sheet_pdf, "pdf_ok": pdf_ok,
+            "n_variants": n_variants}
+
+
+async def _gen_and_send_print(update, ctx, n_variants):
+    uid = update.effective_user.id
+    spec = ctx.user_data.get("print_spec")
+    count = ctx.user_data.get("print_count")
+    title = "Test"
+    msg = await update.effective_message.reply_text("⏳ Testlar va javob varaqlari tayyorlanmoqda…")
+    try:
+        res = await asyncio.to_thread(_build_print, uid, title, count, spec, n_variants)
+    except Exception:
+        log.exception("print gen")
+        return await msg.edit_text("Xatolik yuz berdi. Qayta urinib ko'ring.")
+    if not res:
+        return await msg.edit_text("Savol topilmadi.")
+    code, n_q = res["code"], res["n_q"]
+    await msg.edit_text(
+        f"✅ Tayyor! Test kodi: <code>{code}</code> · {n_variants} variant · {n_q} savol",
+        parse_mode="HTML")
+
+    m = res["n_variants"]
+    if res["pdf_ok"] and res["test_pdf"]:
+        await update.effective_message.reply_document(
+            InputFile(BytesIO(res["test_pdf"]), filename=f"testlar_{code}.pdf"),
+            caption=f"📄 Testlar — {m} ta variant (har biri juft bet, printer uchun)")
+    else:
+        await update.effective_message.reply_text(
+            "⚠️ PDF yaratilmadi (serverda LibreOffice yo'q). Word variantlar yuborilyapti:")
+        for vi, docx in enumerate(res["docxs"], 1):
+            await update.effective_message.reply_document(
+                InputFile(BytesIO(docx), filename=f"test_v{vi}.docx"), caption=f"📄 Variant {vi} (Word)")
+
+    await update.effective_message.reply_document(
+        InputFile(BytesIO(res["sheet_pdf"]), filename=f"javob_varaqlari_{code}.pdf"),
+        caption=f"📝 Javob varaqlari — {m} ta variant")
+
+    lines = ["🔑 <b>Javob kalitlari</b>"]
+    for vi, key in enumerate(res["keys"], 1):
+        lines.append(f"<b>V{vi}:</b> " + "  ".join(f"{i+1}-{l}" for i, l in enumerate(key)))
+    rmk = None
+    if BASE_URL:
+        rmk = InlineKeyboardMarkup([[InlineKeyboardButton(
+            "📊 Natijalar (skanerdan)", url=f"{BASE_URL}/results/{code}")]])
+    await update.effective_message.reply_html("\n".join(lines), reply_markup=rmk)
+
+    for k in ("print_spec", "print_count", "flow"):
+        ctx.user_data.pop(k, None)
+
+
 def build_app():
     app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", cmd_start))
@@ -557,6 +734,12 @@ def build_app():
     app.add_handler(CallbackQueryHandler(on_live_kind, pattern=r"^lkind:"))
     app.add_handler(CallbackQueryHandler(on_live_count, pattern=r"^lcnt:"))
     app.add_handler(CallbackQueryHandler(on_live_time, pattern=r"^lt:"))
+    app.add_handler(CommandHandler("print", start_print))
+    app.add_handler(CommandHandler("scan", start_scan))
+    app.add_handler(CommandHandler("natija", cmd_natija))
+    app.add_handler(CallbackQueryHandler(on_print_kind, pattern=r"^pkind:"))
+    app.add_handler(CallbackQueryHandler(on_print_count, pattern=r"^pcnt:"))
+    app.add_handler(CallbackQueryHandler(on_print_var, pattern=r"^pvar:"))
     app.add_handler(MessageHandler(filters.Document.ALL, on_document))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
     return app
