@@ -49,6 +49,12 @@ def init():
         correct INTEGER, points INTEGER, elapsed REAL, answered_at REAL);
     CREATE INDEX IF NOT EXISTS ix_gplayers_pin ON gplayers(pin);
     CREATE INDEX IF NOT EXISTS ix_ganswers_pin ON ganswers(pin, q_idx);
+    CREATE TABLE IF NOT EXISTS ptests(code TEXT PRIMARY KEY, owner_id INTEGER,
+        title TEXT, n_questions INTEGER, n_variants INTEGER, keys TEXT, created_at REAL);
+    CREATE TABLE IF NOT EXISTS pscans(id INTEGER PRIMARY KEY AUTOINCREMENT,
+        code TEXT, owner_id INTEGER, variant INTEGER, student_id TEXT,
+        correct INTEGER, total INTEGER, answers TEXT, wrong TEXT, ambiguous TEXT, created_at REAL);
+    CREATE INDEX IF NOT EXISTS ix_pscans_code ON pscans(code);
     """)
     for col, ddl in [("stem_xml", "ALTER TABLE questions ADD COLUMN stem_xml TEXT DEFAULT '[]'")]:
         if col not in _cols("questions"):
@@ -581,3 +587,123 @@ def player_state(pin, player_id, token):
     if st == "ended":
         out["podium"] = _players_scored(pin)[:3]
     return out
+
+
+# ─────────────────────────────────────────────
+#  CHOP ETILADIGAN TEST (Word/PDF) — 1-faza
+# ─────────────────────────────────────────────
+def pick_ids(owner_id, count=None, spec=None):
+    """Savol id larini tanlaydi. spec=[(base_id,count),...] yoki count (aralash)."""
+    c = conn(); ids = []
+    if spec:
+        for bid, cnt in spec:
+            rows = c.execute("SELECT id FROM questions WHERE owner_id=? AND base_id=?",
+                             (owner_id, bid)).fetchall()
+            b = [r["id"] for r in rows]; random.shuffle(b); ids.extend(b[:cnt])
+        random.shuffle(ids)
+    else:
+        rows = c.execute("SELECT id FROM questions WHERE owner_id=?", (owner_id,)).fetchall()
+        ids = [r["id"] for r in rows]; random.shuffle(ids)
+        if count:
+            ids = ids[:count]
+    return ids
+
+def _pcode(n=6):
+    alpha = string.ascii_uppercase + string.digits
+    while True:
+        code = "".join(random.choice(alpha) for _ in range(n))
+        if not conn().execute("SELECT 1 FROM ptests WHERE code=?", (code,)).fetchone():
+            return code
+
+def save_print_test(owner_id, title, keys):
+    """keys: [[letter,...] variant bo'yicha]. Skanerlash uchun kalitlarni saqlaydi."""
+    code = _pcode()
+    conn().execute(
+        "INSERT INTO ptests(code,owner_id,title,n_questions,n_variants,keys,created_at)"
+        " VALUES(?,?,?,?,?,?,?)",
+        (code, owner_id, title, len(keys[0]) if keys else 0, len(keys),
+         json.dumps(keys), time.time()))
+    conn().commit()
+    return code
+
+def get_print_test(code):
+    row = conn().execute("SELECT * FROM ptests WHERE code=?", (code,)).fetchone()
+    if not row:
+        return None
+    d = dict(row); d["keys"] = json.loads(d["keys"]); return d
+
+
+def save_scan(code, variant, student_id, correct, total, answers, wrong, ambiguous):
+    pt = get_print_test(code)
+    owner = pt["owner_id"] if pt else None
+    cur = conn().execute(
+        "INSERT INTO pscans(code,owner_id,variant,student_id,correct,total,answers,wrong,ambiguous,created_at)"
+        " VALUES(?,?,?,?,?,?,?,?,?,?)",
+        (code, owner, variant, student_id, correct, total,
+         json.dumps(answers), json.dumps(wrong), json.dumps(ambiguous), time.time()))
+    conn().commit()
+    return cur.lastrowid
+
+def scan_results(code):
+    rows = conn().execute("SELECT * FROM pscans WHERE code=? ORDER BY created_at DESC", (code,)).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["answers"] = json.loads(d["answers"] or "[]")
+        d["wrong"] = json.loads(d["wrong"] or "[]")
+        d["ambiguous"] = json.loads(d["ambiguous"] or "[]")
+        out.append(d)
+    return out
+
+def delete_scan(scan_id):
+    conn().execute("DELETE FROM pscans WHERE id=?", (scan_id,))
+    conn().commit()
+
+def update_scan_answers(scan_id, code, variant, answers):
+    """Qo'lda tuzatishdan keyin qayta baholaydi."""
+    pt = get_print_test(code)
+    if not pt:
+        return None
+    key = pt["keys"][variant - 1] if 1 <= variant <= len(pt["keys"]) else []
+    correct = sum(1 for i, k in enumerate(key) if i < len(answers) and answers[i] == k)
+    wrong = [i + 1 for i, k in enumerate(key) if not (i < len(answers) and answers[i] == k)]
+    conn().execute("UPDATE pscans SET answers=?, correct=?, wrong=?, ambiguous=? WHERE id=?",
+                   (json.dumps(answers), correct, json.dumps(wrong), json.dumps([]), scan_id))
+    conn().commit()
+    return {"correct": correct, "total": len(key), "wrong": wrong}
+
+
+def scan_report(code):
+    """Skaner natijalari hisoboti. Har ID bo'yicha (eng oxirgi skani): ball + xato tafsilotlari."""
+    pt = get_print_test(code)
+    if not pt:
+        return None
+    keys = pt["keys"]; n = pt["n_questions"]
+    scans = scan_results(code)          # eng yangisi birinchi
+    seen, rows = set(), []
+    miss = [0] * (n + 1)                # savol bo'yicha xato soni
+    for s in scans:
+        sid = s["student_id"]
+        if sid in seen:
+            continue
+        seen.add(sid)
+        variant = s["variant"] or 1
+        key = keys[variant - 1] if 1 <= variant <= len(keys) else []
+        ans = s["answers"]
+        detail = []
+        for q in s["wrong"]:
+            marked = ans[q - 1] if 0 <= q - 1 < len(ans) else None
+            corr = key[q - 1] if 0 <= q - 1 < len(key) else "?"
+            detail.append({"q": q, "marked": marked or "—", "correct": corr})
+            if 1 <= q <= n:
+                miss[q] += 1
+        rows.append({"student_id": sid, "variant": variant, "correct": s["correct"],
+                     "total": s["total"], "wrong": detail,
+                     "ambiguous": s["ambiguous"], "created_at": s["created_at"]})
+    rows.sort(key=lambda r: r["student_id"])
+    cnt = len(rows)
+    avg = round(sum(r["correct"] for r in rows) / cnt, 1) if cnt else 0
+    hardest = sorted(range(1, n + 1), key=lambda q: miss[q], reverse=True)
+    hardest = [{"q": q, "miss": miss[q]} for q in hardest if miss[q] > 0][:5]
+    return {"code": code, "title": pt["title"], "n": n, "count": cnt,
+            "avg": avg, "rows": rows, "hardest": hardest}
