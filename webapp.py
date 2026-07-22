@@ -1586,11 +1586,12 @@ async def omr_scan(file: UploadFile = File(...)):
     ambiguous = [q for q in res["ambiguous"] if q <= n]
     correct = sum(1 for i, k in enumerate(key) if i < len(answers) and answers[i] == k)
     wrong = [i + 1 for i, k in enumerate(key) if not (i < len(answers) and answers[i] == k)]
-    sid = db.save_scan(code, variant, res["student_id"], correct, n, answers, wrong, ambiguous)
+    name_img = res.get("name_img")
+    sid = db.save_scan(code, variant, res["student_id"], correct, n, answers, wrong, ambiguous, name_img)
     return JSONResponse({"ok": True, "scan_id": sid, "code": code, "variant": variant,
                          "student_id": res["student_id"], "id_ambiguous": res.get("id_ambiguous"),
                          "correct": correct, "total": n, "answers": answers,
-                         "wrong": wrong, "ambiguous": ambiguous})
+                         "wrong": wrong, "ambiguous": ambiguous, "name_img": name_img})
 
 @app.post("/omr/api/confirm")
 async def omr_confirm(req: Request):
@@ -1647,6 +1648,7 @@ def _scan_html():
 .trow{display:flex;justify-content:space-between;background:var(--glass);border:1px solid var(--gb);
   border-radius:10px;padding:9px 13px;margin-bottom:6px;font-weight:700;font-size:14px}
 .spin{text-align:center;color:var(--muted);margin-top:16px;font-weight:700}
+.nameimg{max-width:100%;height:auto;background:#fff;border-radius:6px;padding:3px;margin-top:8px;display:block}
 </style></head><body>
 <div class="app">
   <div class="brand">📷 Javob varag'i <b>skaneri</b></div>
@@ -1690,6 +1692,7 @@ function render(d){
    '<div class="card" id="card">'+
    '<div class="rowb"><div class="sid">ID: '+up(d.student_id)+' <small>V'+d.variant+(d.id_ambiguous?" · ID shubhali":"")+'</small></div>'+
    '<div class="badge '+cls+'">'+d.correct+'/'+d.total+'</div></div>'+
+   (d.name_img?'<img class="nameimg" src="data:image/png;base64,'+d.name_img+'">':'')+
    '<div class="meta">To\\'g\\'ri: '+d.correct+' · Xato: '+(d.total-d.correct)+' · '+p+'%'+
    (d.wrong&&d.wrong.length?' · Xato savollar: '+d.wrong.join(', '):'')+'</div>'+amb+'</div>';
   if(d.ambiguous&&d.ambiguous.length) buildFixer(d);
@@ -1785,6 +1788,7 @@ tr:hover{background:rgba(255,255,255,.03)}
   border-radius:6px;padding:1px 7px;margin:2px 3px 2px 0;font-weight:700;font-size:12.5px;white-space:nowrap}
 .none{color:#4ade80;font-weight:700}
 .amb{color:#fbbf24;font-size:11px;font-weight:700}
+.nameimg{max-width:150px;height:auto;background:#fff;border-radius:4px;padding:2px;display:block}
 .empty{text-align:center;color:var(--muted);padding:40px;font-weight:700}
 .hard{margin-top:18px;color:var(--muted);font-size:13px}
 .hard b{color:#f87171}
@@ -1817,13 +1821,14 @@ function render(d){
     '<div class="stat"><div class="v">'+d.avg+'/'+d.n+'</div><div class="l">O\\'rtacha</div></div>'+
     '<div class="stat"><div class="v">'+(d.n)+'</div><div class="l">Savol</div></div>';
   if(!d.rows.length){document.getElementById('body').innerHTML='<div class="empty">Hali skaner qilinmagan.</div>';document.getElementById('hard').innerHTML='';return;}
-  let h='<table><thead><tr><th>ID</th><th>To\\'g\\'ri</th><th>Xato savollar (belgilagan/to\\'g\\'ri)</th></tr></thead><tbody>';
+  let h='<table><thead><tr><th>ID</th><th>Ism</th><th>To\\'g\\'ri</th><th>Xato savollar (belgilagan/to\\'g\\'ri)</th></tr></thead><tbody>';
   d.rows.forEach(r=>{
     const p=r.total?Math.round(r.correct/r.total*100):0;
     let wrong = r.wrong.length ? r.wrong.map(w=>'<span class="chip">'+w.q+esc(w.marked)+'('+esc(w.correct)+')</span>').join('')
                                : '<span class="none">✓ hammasi to\\'g\\'ri</span>';
     const amb = (r.ambiguous&&r.ambiguous.length)?' <span class="amb">⚠️'+r.ambiguous.length+'</span>':'';
     h+='<tr><td class="sid">'+esc(r.student_id)+'<div class="amb" style="color:var(--muted);font-weight:600">V'+r.variant+amb+'</div></td>'+
+       '<td>'+(r.name_img?'<img class="nameimg" src="data:image/png;base64,'+r.name_img+'">':'<span style="color:var(--muted)">\u2014</span>')+'</td>'+
        '<td class="score '+cls(p)+'">'+r.correct+'/'+r.total+' <span class="pct">'+p+'%</span></td>'+
        '<td>'+wrong+'</td></tr>';
   });
