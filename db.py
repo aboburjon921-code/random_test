@@ -53,7 +53,7 @@ def init():
         title TEXT, n_questions INTEGER, n_variants INTEGER, keys TEXT, created_at REAL);
     CREATE TABLE IF NOT EXISTS pscans(id INTEGER PRIMARY KEY AUTOINCREMENT,
         code TEXT, owner_id INTEGER, variant INTEGER, student_id TEXT,
-        correct INTEGER, total INTEGER, answers TEXT, wrong TEXT, ambiguous TEXT, created_at REAL);
+        correct INTEGER, total INTEGER, answers TEXT, wrong TEXT, ambiguous TEXT, name_img TEXT, created_at REAL);
     CREATE INDEX IF NOT EXISTS ix_pscans_code ON pscans(code);
     """)
     for col, ddl in [("stem_xml", "ALTER TABLE questions ADD COLUMN stem_xml TEXT DEFAULT '[]'")]:
@@ -63,6 +63,8 @@ def init():
         c.execute("ALTER TABLE tests ADD COLUMN closed INTEGER DEFAULT 0")
     if "avatar" not in _cols("sessions"):
         c.execute("ALTER TABLE sessions ADD COLUMN avatar TEXT DEFAULT ''")
+    if "name_img" not in _cols("pscans"):
+        c.execute("ALTER TABLE pscans ADD COLUMN name_img TEXT")
     c.commit()
 
 # ---------- media ----------
@@ -633,14 +635,14 @@ def get_print_test(code):
     d = dict(row); d["keys"] = json.loads(d["keys"]); return d
 
 
-def save_scan(code, variant, student_id, correct, total, answers, wrong, ambiguous):
+def save_scan(code, variant, student_id, correct, total, answers, wrong, ambiguous, name_img=None):
     pt = get_print_test(code)
     owner = pt["owner_id"] if pt else None
     cur = conn().execute(
-        "INSERT INTO pscans(code,owner_id,variant,student_id,correct,total,answers,wrong,ambiguous,created_at)"
-        " VALUES(?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO pscans(code,owner_id,variant,student_id,correct,total,answers,wrong,ambiguous,name_img,created_at)"
+        " VALUES(?,?,?,?,?,?,?,?,?,?,?)",
         (code, owner, variant, student_id, correct, total,
-         json.dumps(answers), json.dumps(wrong), json.dumps(ambiguous), time.time()))
+         json.dumps(answers), json.dumps(wrong), json.dumps(ambiguous), name_img, time.time()))
     conn().commit()
     return cur.lastrowid
 
@@ -699,7 +701,8 @@ def scan_report(code):
                 miss[q] += 1
         rows.append({"student_id": sid, "variant": variant, "correct": s["correct"],
                      "total": s["total"], "wrong": detail,
-                     "ambiguous": s["ambiguous"], "created_at": s["created_at"]})
+                     "ambiguous": s["ambiguous"], "created_at": s["created_at"],
+                     "name_img": s.get("name_img")})
     rows.sort(key=lambda r: r["student_id"])
     cnt = len(rows)
     avg = round(sum(r["correct"] for r in rows) / cnt, 1) if cnt else 0
