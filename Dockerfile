@@ -1,4 +1,4 @@
-# Railway uchun Dockerfile — LibreOffice va OpenCV ishonchli o'rnatiladi.
+# Railway uchun Dockerfile — LibreOffice (formulalar bilan) va OpenCV ishonchli o'rnatiladi.
 # Dockerfile mavjud bo'lsa, Railway uni Nixpacks o'rniga ishlatadi.
 
 FROM python:3.12-slim
@@ -8,11 +8,13 @@ ENV DEBIAN_FRONTEND=noninteractive \
     HOME=/root
 
 # Tizim paketlari:
-#   libreoffice-writer  -> Word (.docx) -> PDF aylantirish (soffice /usr/bin ga tushadi)
+#   libreoffice-writer  -> Word (.docx) -> PDF aylantirish
+#   libreoffice-math    -> FORMULALAR (Word tenglamalari) PDF'da chiqishi uchun MAJBURIY!
 #   libglib2.0-0, libgl1 -> OpenCV (skaner) import bo'lishi uchun
 #   fonts-liberation    -> PDF shriftlari to'g'ri chiqishi uchun
 RUN apt-get update && apt-get install -y --no-install-recommends \
       libreoffice-writer \
+      libreoffice-math \
       libglib2.0-0 \
       libgl1 \
       fonts-liberation \
