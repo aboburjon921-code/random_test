@@ -33,6 +33,18 @@ ID_TOP_Y  = 214.0                        # 0-raqam qatori markazi
 ID_ROW_DY = 22.0
 ID_R      = 8.5                          # doira radiusi
 
+# ISM kataklari (har harf alohida katakda, bosma bosh harf)
+NAME_BOXES = 16
+NAME_X0    = 54.0                        # birinchi katak chap chekkasi (top-left)
+NAME_BOX_W = 23.0
+NAME_BOX_H = 22.0
+NAME_Y     = 108.0                       # kataklar tepasi (top-left)
+
+def name_crop_box():
+    """Skaner kesib oladigan ism sohasi (x0,y0,x1,y1) pt (top-left)."""
+    return (NAME_X0 - 3, NAME_Y - 3,
+            NAME_X0 + NAME_BOXES * NAME_BOX_W + 1, NAME_Y + NAME_BOX_H + 3)
+
 # javob panjarasi (2 ustun)
 ANS_TOP_Y   = 168.0
 ANS_ROW_DY  = 22.0
@@ -103,10 +115,15 @@ def build_answer_sheet_pdf(code, variant, n_questions, title="Test", total=None,
     c.drawString(54, _y(66), "JAVOB VARAG'I")
     c.setFont("Helvetica-Bold", 10)
     c.drawString(54, _y(84), "%s  ·  Jami: %d ta savol" % (title, total))
-    c.setFont("Helvetica", 8.5)
-    c.setFillGray(0.35)
-    c.drawString(54, _y(100), "F.I.Sh: ______________________________")
+    # ISM kataklari (bosma bosh harflar)
+    c.setFont("Helvetica-Bold", 8)
+    c.setFillGray(0.3)
+    c.drawString(NAME_X0, _y(103), "ISM (BOSMA HARFLAR, har katakka bitta harf):")
     c.setFillGray(0)
+    c.setLineWidth(0.8)
+    for i in range(NAME_BOXES):
+        bx = NAME_X0 + i * NAME_BOX_W
+        c.rect(bx, _y(NAME_Y + NAME_BOX_H), NAME_BOX_W - 3, NAME_BOX_H, stroke=1, fill=0)
 
     # QR (kod + variant) yuqori-o'ngda
     data = "%s:%d" % (code, variant)
