@@ -3,6 +3,7 @@ OMR skaner (3-faza). Suratdan javob varag'ini o'qiydi.
 Bosqichlar: langarlarni top -> to'g'rila (homografiya) -> QR (kod:variant) ->
 ID bo'yalgan doiralar -> javob doiralari. omr.py geometriyasidan foydalanadi.
 """
+import base64
 import numpy as np
 import cv2
 import omr
@@ -101,6 +102,28 @@ def _pick(fills):
     return top, False
 
 
+def _crop_name(gray_warp):
+    """Ism kataklari sohasini rasm (base64 PNG) qilib qaytaradi."""
+    try:
+        x0, y0, x1, y1 = omr.name_crop_box()
+        X0, Y0 = int(x0 * SCALE), int(y0 * SCALE)
+        X1, Y1 = int(x1 * SCALE), int(y1 * SCALE)
+        H, W = gray_warp.shape
+        X0, Y0 = max(0, X0), max(0, Y0)
+        X1, Y1 = min(W, X1), min(H, Y1)
+        crop = gray_warp[Y0:Y1, X0:X1]
+        if crop.size == 0:
+            return None
+        # kontrastni oshirish (toza ko'rinishi uchun)
+        crop = cv2.normalize(crop, None, 0, 255, cv2.NORM_MINMAX)
+        ok, enc = cv2.imencode(".png", crop)
+        if not ok:
+            return None
+        return base64.b64encode(enc.tobytes()).decode()
+    except Exception:
+        return None
+
+
 def scan(image_bytes, n_questions):
     """Suratni o'qiydi. -> dict."""
     img = _load(image_bytes)
@@ -145,9 +168,10 @@ def scan(image_bytes, n_questions):
         if amb or idx is None:
             ambiguous.append(q + 1)
 
+    name_img = _crop_name(gw)
     return {"ok": True, "code": code, "variant": variant,
             "student_id": student_id, "id_ambiguous": id_ambig,
-            "answers": answers, "ambiguous": ambiguous}
+            "answers": answers, "ambiguous": ambiguous, "name_img": name_img}
 
 
 def grade(answers, key):
