@@ -218,6 +218,41 @@ def merge_pdfs(pdf_list, pad_even=False):
 
 def docx_to_pdf(docx_bytes):
     """LibreOffice bilan .docx -> .pdf. Bo'lmasa None qaytaradi."""
+    res = docx_to_pdf_batch([docx_bytes])
+    return res[0] if res else None
+
+
+def docx_to_pdf_batch(docx_list):
+    """Ko'p .docx ni BITTA LibreOffice chaqiruvida PDF'ga aylantiradi (tez).
+    Har biriga mos PDF (yoki None) ro'yxatini qaytaradi."""
+    from shutil import which
+    soffice = which("soffice") or which("libreoffice")
+    n = len(docx_list)
+    if not soffice or n == 0:
+        return [None] * n
+    with tempfile.TemporaryDirectory() as d:
+        for i, dx in enumerate(docx_list):
+            with open(os.path.join(d, "v%d.docx" % i), "wb") as f:
+                f.write(dx)
+        try:
+            subprocess.run([soffice, "--headless", "--convert-to", "pdf", "--outdir", d]
+                           + [os.path.join(d, "v%d.docx" % i) for i in range(n)],
+                           check=True, timeout=max(120, 6 * n),
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            return [None] * n
+        out = []
+        for i in range(n):
+            pp = os.path.join(d, "v%d.pdf" % i)
+            if os.path.exists(pp):
+                with open(pp, "rb") as f:
+                    out.append(f.read())
+            else:
+                out.append(None)
+        return out
+
+
+def _docx_to_pdf_single_unused(docx_bytes):
     soffice = None
     for cand in ("soffice", "libreoffice"):
         from shutil import which
