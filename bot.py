@@ -27,6 +27,7 @@ BTN_CLEAR = "🗑 Bazani tozalash"; BTN_HELP = "ℹ️ Yordam"; BTN_LIVE = "🎮
 BTN_PRINT = "🖨 Chop etiladigan test"
 BTN_SCAN = "📷 Skaner"
 PRINT_VARIANTS = [1, 2, 3, 4]
+MAX_VARIANTS = 100
 
 
 def is_admin(uid): return (not ADMIN_IDS) or (uid in ADMIN_IDS)
@@ -366,6 +367,11 @@ async def on_text(update, ctx):
         if text == BTN_PRINT: return await start_print(update, ctx)
         if text == BTN_SCAN: return await start_scan(update, ctx)
         if text == BTN_HELP: return await update.message.reply_html(HELP, reply_markup=menu())
+        if ctx.user_data.get("await_pvar"):
+            ctx.user_data["await_pvar"] = False
+            if not text.isdigit(): return await update.message.reply_text("Faqat son yuboring.")
+            n = max(1, min(int(text), MAX_VARIANTS))
+            return await _gen_and_send_print(update, ctx, n)
         if ctx.user_data.get("await_pcount"):
             ctx.user_data["await_pcount"] = False
             if not text.isdigit(): return await update.message.reply_text("Faqat son yuboring.")
@@ -568,8 +574,10 @@ def _print_count_kb(total):
     return InlineKeyboardMarkup(rows)
 
 def _print_var_kb():
-    return InlineKeyboardMarkup([[InlineKeyboardButton(
-        ("1 variant" if v == 1 else f"{v} variant"), callback_data=f"pvar:{v}") for v in PRINT_VARIANTS]])
+    row = [InlineKeyboardButton(("1 variant" if v == 1 else f"{v} variant"),
+                                callback_data=f"pvar:{v}") for v in PRINT_VARIANTS]
+    return InlineKeyboardMarkup([row,
+        [InlineKeyboardButton(f"✏️ Boshqa (har o'quvchiga, {MAX_VARIANTS} gacha)", callback_data="pvar:custom")]])
 
 async def start_print(update, ctx):
     uid = update.effective_user.id
@@ -636,8 +644,13 @@ async def on_print_count(update, ctx):
 
 async def on_print_var(update, ctx):
     q = update.callback_query; await q.answer()
-    n = int(q.data.split(":")[1])
-    await _gen_and_send_print(update, ctx, n)
+    val = q.data.split(":")[1]
+    if val == "custom":
+        ctx.user_data["await_pvar"] = True
+        return await q.edit_message_text(
+            f"✏️ Nechta variant? Sonini yozing (1–{MAX_VARIANTS}).\n"
+            "Ko'p bo'lsa tayyorlash biroz uzoqroq davom etadi.")
+    await _gen_and_send_print(update, ctx, int(val))
 
 def _build_print(uid, title, count, spec, n_variants):
     ids = db.pick_ids(uid, count=count, spec=spec)
@@ -645,15 +658,15 @@ def _build_print(uid, title, count, spec, n_variants):
     if not questions:
         return None
     n_q = len(questions)
-    docxs, pdfs, keys = [], [], []
+    docxs, keys = [], []
     for v in range(n_variants):
         order = list(questions); random.shuffle(order)
         vtitle = title if n_variants == 1 else f"{title} · Variant {v+1}"
         docx, key = docgen.build_test_docx(order, title=vtitle, shuffle_opts=True,
                                            get_media=db.get_media, seed=random.random())
         docxs.append(docx); keys.append(key)
-        pdfs.append(docgen.docx_to_pdf(docx))
     code = db.save_print_test(uid, title, keys)
+    pdfs = docgen.docx_to_pdf_batch(docxs)          # hammasi bitta chaqiruvda
     sheets = [omr.build_answer_sheet_pdf(code, vi + 1, n_q, title=title, total=n_q)
               for vi in range(n_variants)]
 
