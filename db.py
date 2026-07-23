@@ -53,7 +53,7 @@ def init():
         title TEXT, n_questions INTEGER, n_variants INTEGER, keys TEXT, created_at REAL);
     CREATE TABLE IF NOT EXISTS pscans(id INTEGER PRIMARY KEY AUTOINCREMENT,
         code TEXT, owner_id INTEGER, variant INTEGER, student_id TEXT,
-        correct INTEGER, total INTEGER, answers TEXT, wrong TEXT, ambiguous TEXT, name_img TEXT, created_at REAL);
+        correct INTEGER, total INTEGER, answers TEXT, wrong TEXT, ambiguous TEXT, created_at REAL);
     CREATE INDEX IF NOT EXISTS ix_pscans_code ON pscans(code);
     """)
     for col, ddl in [("stem_xml", "ALTER TABLE questions ADD COLUMN stem_xml TEXT DEFAULT '[]'")]:
@@ -61,10 +61,13 @@ def init():
             c.execute(ddl)
     if "closed" not in _cols("tests"):
         c.execute("ALTER TABLE tests ADD COLUMN closed INTEGER DEFAULT 0")
+    if "proctor" not in _cols("tests"):
+        # himoya rejimi: full-screen + tab-kuzatuv + savolga qaytmaslik (standart: yoniq)
+        c.execute("ALTER TABLE tests ADD COLUMN proctor INTEGER DEFAULT 1")
     if "avatar" not in _cols("sessions"):
         c.execute("ALTER TABLE sessions ADD COLUMN avatar TEXT DEFAULT ''")
-    if "name_img" not in _cols("pscans"):
-        c.execute("ALTER TABLE pscans ADD COLUMN name_img TEXT")
+    if "flags" not in _cols("sessions"):
+        c.execute("ALTER TABLE sessions ADD COLUMN flags TEXT DEFAULT '{}'")
     c.commit()
 
 # ---------- media ----------
@@ -189,7 +192,7 @@ def get_test(code):
     d = dict(row); d["question_ids"] = json.loads(d["question_ids"]); return d
 
 def tests_by_owner(owner_id):
-    rows = conn().execute("SELECT code,title,question_ids,created_at,panel_token,closed FROM tests "
+    rows = conn().execute("SELECT code,title,question_ids,created_at,panel_token,closed,proctor FROM tests "
                           "WHERE owner_id=? ORDER BY created_at DESC", (owner_id,)).fetchall()
     out = []
     for r in rows:
@@ -200,6 +203,14 @@ def set_closed(code, owner_id, closed):
     c = conn()
     cur = c.execute("UPDATE tests SET closed=? WHERE code=? AND owner_id=?",
                     (1 if closed else 0, code, owner_id))
+    c.commit()
+    return cur.rowcount > 0
+
+def set_proctor(code, owner_id, on):
+    """Himoya rejimini (full-screen + tab-kuzatuv + qaytmaslik) yoqadi/o'chiradi."""
+    c = conn()
+    cur = c.execute("UPDATE tests SET proctor=? WHERE code=? AND owner_id=?",
+                    (1 if on else 0, code, owner_id))
     c.commit()
     return cur.rowcount > 0
 
@@ -271,6 +282,19 @@ def save_live(token, qindex, pos):
     live = s["live"]; live[str(qindex)] = pos
     conn().execute("UPDATE sessions SET live=? WHERE token=?", (json.dumps(live), token)); conn().commit()
 
+def add_flag(token, kind="blur"):
+    """Halollik: o'quvchi ilova/tabdan chiqishini qayd etadi. Faqat faol sessiyada."""
+    row = conn().execute("SELECT flags,status FROM sessions WHERE token=?", (token,)).fetchone()
+    if not row or row["status"] != "active":
+        return None
+    kind = (kind or "blur")[:20]
+    flags = json.loads(row["flags"] or "{}")
+    flags[kind] = flags.get(kind, 0) + 1
+    flags["total"] = flags.get("total", 0) + 1
+    conn().execute("UPDATE sessions SET flags=? WHERE token=?", (json.dumps(flags), token))
+    conn().commit()
+    return flags["total"]
+
 def _grade(s, answers):
     """answers: {qindex: pos}. return (score, detail list)."""
     score = 0; detail = []
@@ -311,7 +335,7 @@ def expire_due():
 def panel_data(code):
     test = get_test(code)
     if not test: return None
-    rows = conn().execute("SELECT student_name,avatar,score,total,status,started_at,finished_at,live,order_json "
+    rows = conn().execute("SELECT student_name,avatar,score,total,status,started_at,finished_at,live,order_json,flags "
                           "FROM sessions WHERE code=? ORDER BY status,score DESC", (code,)).fetchall()
     students = []
     q_miss = {}   # qindex -> [wrong, total_answered]
@@ -329,10 +353,11 @@ def panel_data(code):
         spent = None
         if d["status"] == "finished" and d["finished_at"]:
             spent = int(d["finished_at"] - d["started_at"])
+        warn = json.loads(d["flags"] or "{}").get("total", 0) if d.get("flags") else 0
         students.append({"name": d["student_name"], "avatar": d["avatar"] or "🐵",
                          "score": d["score"], "total": d["total"],
                          "status": d["status"], "answered": answered, "spent": spent,
-                         "correct": correct_live})
+                         "correct": correct_live, "warn": warn})
         if d["status"] == "finished":
             finished_n += 1; total_score += d["score"]
             for i, item in enumerate(order):
@@ -635,14 +660,14 @@ def get_print_test(code):
     d = dict(row); d["keys"] = json.loads(d["keys"]); return d
 
 
-def save_scan(code, variant, student_id, correct, total, answers, wrong, ambiguous, name_img=None):
+def save_scan(code, variant, student_id, correct, total, answers, wrong, ambiguous):
     pt = get_print_test(code)
     owner = pt["owner_id"] if pt else None
     cur = conn().execute(
-        "INSERT INTO pscans(code,owner_id,variant,student_id,correct,total,answers,wrong,ambiguous,name_img,created_at)"
-        " VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO pscans(code,owner_id,variant,student_id,correct,total,answers,wrong,ambiguous,created_at)"
+        " VALUES(?,?,?,?,?,?,?,?,?,?)",
         (code, owner, variant, student_id, correct, total,
-         json.dumps(answers), json.dumps(wrong), json.dumps(ambiguous), name_img, time.time()))
+         json.dumps(answers), json.dumps(wrong), json.dumps(ambiguous), time.time()))
     conn().commit()
     return cur.lastrowid
 
@@ -701,8 +726,7 @@ def scan_report(code):
                 miss[q] += 1
         rows.append({"student_id": sid, "variant": variant, "correct": s["correct"],
                      "total": s["total"], "wrong": detail,
-                     "ambiguous": s["ambiguous"], "created_at": s["created_at"],
-                     "name_img": s.get("name_img")})
+                     "ambiguous": s["ambiguous"], "created_at": s["created_at"]})
     rows.sort(key=lambda r: r["student_id"])
     cnt = len(rows)
     avg = round(sum(r["correct"] for r in rows) / cnt, 1) if cnt else 0
