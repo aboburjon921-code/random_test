@@ -124,10 +124,13 @@ def student_page(token: str):
     name = html.escape(s.get("student_name") or "O'quvchi")
     avatar = html.escape(s.get("avatar") or "🐵")
 
-    return HTMLResponse(_test_page_html(token, remaining, total, cards_b64, name, avatar))
+    test = db.get_test(s["code"])
+    proctor = 1 if (test and test.get("proctor", 1)) else 0
+
+    return HTMLResponse(_test_page_html(token, remaining, total, cards_b64, name, avatar, proctor))
 
 
-def _test_page_html(token, remaining, total, cards_b64, name, avatar):
+def _test_page_html(token, remaining, total, cards_b64, name, avatar, proctor=0):
     return f"""<!DOCTYPE html>
 <html lang="uz">
 <head>
@@ -326,6 +329,32 @@ def _test_page_html(token, remaining, total, cards_b64, name, avatar):
   background: linear-gradient(135deg, var(--neon), var(--neon2));
   color: white; box-shadow: 0 4px 14px rgba(108,99,255,0.4);
 }}
+
+/* ── HALOLLIK: ogohlantirish banneri ── */
+#cheat-warn {{
+  position: fixed; top: 68px; left: 12px; right: 12px; z-index: 300;
+  display: none; padding: 12px 16px; border-radius: 13px;
+  background: rgba(239,68,68,0.96); color: #fff;
+  font-size: 13px; font-weight: 700; text-align: center; line-height: 1.4;
+  box-shadow: 0 8px 28px rgba(239,68,68,0.5);
+  animation: fadeIn 0.3s ease;
+}}
+/* ── HALOLLIK: full-screenga qaytish qoplamasi ── */
+#fs-gate {{
+  position: fixed; inset: 0; z-index: 400;
+  display: none; flex-direction: column; align-items: center; justify-content: center;
+  gap: 16px; padding: 28px; text-align: center;
+  background: rgba(5,5,20,0.96); backdrop-filter: blur(16px);
+}}
+#fs-gate .fg-emoji {{ font-size: 60px; }}
+#fs-gate .fg-title {{ font-size: 20px; font-weight: 800; }}
+#fs-gate .fg-sub {{ font-size: 14px; color: var(--muted); max-width: 320px; line-height: 1.5; }}
+#fs-gate .fg-btn {{
+  height: 52px; padding: 0 28px; border-radius: 14px; border: none; cursor: pointer;
+  font-size: 16px; font-weight: 800; font-family: inherit; color: #fff;
+  background: linear-gradient(135deg, var(--neon), var(--neon2));
+  box-shadow: 0 4px 20px rgba(108,99,255,0.4);
+}}
 </style>
 </head>
 <body>
@@ -368,6 +397,17 @@ def _test_page_html(token, remaining, total, cards_b64, name, avatar):
   <button class="btn btn-finish" id="btn-finish" onclick="submitTest()" style="display:none">✅ Yakunlash</button>
 </div>
 
+<!-- HALOLLIK: ogohlantirish banneri -->
+<div id="cheat-warn"></div>
+
+<!-- HALOLLIK: full-screenga qaytish qoplamasi -->
+<div id="fs-gate">
+  <div class="fg-emoji">🔒</div>
+  <div class="fg-title">Test himoya rejimida</div>
+  <div class="fg-sub">Testni davom ettirish uchun to'liq ekran (full-screen) rejimida bo'lish shart. Chiqishlar o'qituvchiga qayd etiladi.</div>
+  <button class="fg-btn" onclick="enterFs()">To'liq ekranda davom etish</button>
+</div>
+
 <!-- RESULT OVERLAY -->
 <div id="result-overlay">
   <div class="result-box">
@@ -391,6 +431,7 @@ def _test_page_html(token, remaining, total, cards_b64, name, avatar):
 {_STAR_JS}
 const TOKEN = "{token}";
 const TOTAL = {total};
+const PROCTOR = {proctor};   // himoya rejimi: full-screen + qaytmaslik + kuzatuv
 // TUZATISH: JSON endi base64 orqali xavfsiz uzatiladi va JSON.parse(atob(...))
 // bilan qayta tiklanadi — savol matnidagi HECH QANDAY belgi bu qatorni
 // buzolmaydi (avvalgi "const CARDS = {{...}};" usuli savol ichida maxsus
@@ -443,6 +484,7 @@ function pick(q, k, el) {{
 }}
 
 function nav(dir) {{
+  if(PROCTOR && dir < 0) return;   // himoya rejimi: orqaga qaytish taqiqlangan
   const next = curIdx + dir;
   if(next < 0 || next >= TOTAL) return;
   document.getElementById('card'+curIdx).classList.remove('active');
@@ -456,7 +498,8 @@ function updateNav() {{
   const prev = document.getElementById('btn-prev');
   const nxt = document.getElementById('btn-next');
   const fin = document.getElementById('btn-finish');
-  prev.disabled = (curIdx === 0);
+  if(PROCTOR) {{ prev.style.display = 'none'; }}   // orqaga tugmasi yashiriladi
+  else {{ prev.disabled = (curIdx === 0); }}
   if(curIdx === TOTAL - 1) {{
     nxt.style.display = 'none'; fin.style.display = 'flex';
   }} else {{
@@ -562,6 +605,45 @@ function showResult(res) {{
 
 function goReview() {{ location.href = '/r/' + TOKEN; }}
 function closeApp() {{ try {{ Telegram.WebApp.close(); }} catch(e) {{ history.back(); }} }}
+
+// ── HALOLLIK: kuzatuv (tab/ilovadan chiqish) + full-screen majburlash ──
+let warnCount = 0, lastFlag = 0;
+function logFlag(kind) {{
+  if(submitted) return;
+  const now = Date.now();
+  if(now - lastFlag < 1500) return;   // qisqa oraliqda takror hisoblanmasin
+  lastFlag = now; warnCount++;
+  fetch('/api/flag', {{method:'POST', headers:{{'Content-Type':'application/json'}},
+    body: JSON.stringify({{token: TOKEN, kind: kind}})}}).catch(()=>{{}});
+  const w = document.getElementById('cheat-warn');
+  w.textContent = '⚠️ Ilovadan chiqish qayd etildi (' + warnCount + '). Bu o\\'qituvchi paneliga yoziladi.';
+  w.style.display = 'block';
+  clearTimeout(w._t); w._t = setTimeout(function(){{ w.style.display='none'; }}, 4000);
+}}
+document.addEventListener('visibilitychange', function() {{ if(document.hidden) logFlag('hidden'); }});
+window.addEventListener('blur', function() {{ logFlag('blur'); }});
+
+function isFs() {{ return !!(document.fullscreenElement || document.webkitFullscreenElement); }}
+function fsSupported() {{ const el=document.documentElement; return !!(el.requestFullscreen || el.webkitRequestFullscreen); }}
+function enterFs() {{
+  const el = document.documentElement;
+  const req = el.requestFullscreen || el.webkitRequestFullscreen;
+  if(req) {{ try {{ req.call(el); }} catch(e) {{}} }}
+  setTimeout(checkFs, 400);
+}}
+function checkFs() {{
+  const gate = document.getElementById('fs-gate');
+  if(PROCTOR && !submitted && fsSupported() && !isFs()) gate.style.display = 'flex';
+  else gate.style.display = 'none';
+}}
+if(PROCTOR) {{
+  function onFsChange() {{ if(!isFs() && !submitted) logFlag('fs_exit'); checkFs(); }}
+  document.addEventListener('fullscreenchange', onFsChange);
+  document.addEventListener('webkitfullscreenchange', onFsChange);
+  // brauzer full-screenni faqat foydalanuvchi harakatidan keyin ruxsat beradi
+  document.addEventListener('click', function once() {{ if(!isFs()) enterFs(); }}, {{once:true}});
+  setTimeout(checkFs, 800);
+}}
 
 // ── BUILD ──
 buildCards();
@@ -772,6 +854,16 @@ async def api_answer(req: Request):
     db.save_live(d["token"], d["i"], d["pos"])
     return JSONResponse({"ok": True})
 
+@app.post("/api/flag")
+async def api_flag(req: Request):
+    """Halollik: o'quvchi ilova/tabdan chiqishini qayd etadi."""
+    try:
+        d = await req.json()
+        total = db.add_flag(d.get("token", ""), d.get("kind", "blur"))
+    except Exception:
+        total = None
+    return JSONResponse({"ok": True, "total": total})
+
 @app.post("/api/submit")
 async def api_submit(req: Request):
     d = await req.json()
@@ -885,6 +977,8 @@ def _panel_html(code, panel_token):
 .race-status-active {{ font-size:11px; color:#34d399; font-weight:700; animation:blink 1.5s infinite; }}
 .race-status-done {{ font-size:11px; color:var(--muted); font-weight:600; }}
 .race-score {{ font-size:14px; font-weight:800; }}
+.race-warn {{ font-size:11px; font-weight:800; color:#fca5a5; background:rgba(239,68,68,.15);
+  border:1px solid rgba(239,68,68,.35); border-radius:99px; padding:2px 8px; white-space:nowrap; }}
 .race-bar-bg {{ height:6px; background:rgba(255,255,255,.08); border-radius:99px; overflow:hidden; }}
 .race-bar-fill {{ height:100%; border-radius:99px; transition:width 0.6s cubic-bezier(.4,0,.2,1); }}
 .fill-active {{ background:linear-gradient(90deg,var(--neon),var(--neon2)); }}
@@ -1024,6 +1118,7 @@ function render(data) {{
         <span class="race-rank">${{rankEmoji}}</span>
         <span class="race-av">${{s.avatar||'🐵'}}</span>
         <span class="race-name">${{esc(s.name)}}</span>
+        ${{s.warn>0?`<span class="race-warn" title="Ilova/tabdan chiqishlar">⚠️ ${{s.warn}}</span>`:''}}
         ${{statusHtml}}
         <span class="race-score">${{s.score||0}}/${{s.total||0}}</span>
       </div>
