@@ -144,9 +144,13 @@ def _test_page_html(token, remaining, total, cards_b64, name, avatar, proctor=0)
 <style>
 {_BASE_STYLE}
 
+/* ── APP-SHELL: barqaror layout (uzun matn/variantlar uchun) ── */
+html, body {{ height: 100%; }}
+body {{ overflow: hidden; display: flex; flex-direction: column; }}
+
 /* ── TOPBAR ── */
 .topbar {{
-  position: sticky; top: 0; z-index: 50;
+  flex: 0 0 auto; z-index: 50;
   padding: 10px 16px;
   display: flex; align-items: center; justify-content: space-between; gap: 10px;
   background: rgba(10,10,26,0.85);
@@ -175,7 +179,7 @@ def _test_page_html(token, remaining, total, cards_b64, name, avatar, proctor=0)
 .prog-bar-fill {{ height: 100%; background: linear-gradient(90deg, var(--neon), var(--neon2)); border-radius: 99px; transition: width 0.4s cubic-bezier(.4,0,.2,1); width: 0%; }}
 
 /* ── CARD CONTAINER ── */
-.cards-wrap {{ padding: 16px 16px 110px; }}
+.cards-wrap {{ flex: 1 1 auto; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 16px 16px 24px; }}
 .card {{
   display: none;
   background: var(--glass);
@@ -248,9 +252,10 @@ def _test_page_html(token, remaining, total, cards_b64, name, avatar, proctor=0)
 
 /* ── NAV BUTTONS ── */
 .nav-bar {{
-  position: fixed; bottom: 0; left: 0; right: 0;
+  flex: 0 0 auto;
   padding: 12px 16px; display: flex; gap: 10px;
-  background: linear-gradient(to top, rgba(10,10,26,0.98) 60%, transparent);
+  background: rgba(10,10,26,0.92);
+  border-top: 1px solid var(--glass-border);
   backdrop-filter: blur(10px);
 }}
 .btn {{
@@ -606,8 +611,11 @@ function showResult(res) {{
 function goReview() {{ location.href = '/r/' + TOKEN; }}
 function closeApp() {{ try {{ Telegram.WebApp.close(); }} catch(e) {{ history.back(); }} }}
 
-// ── HALOLLIK: kuzatuv (tab/ilovadan chiqish) + full-screen majburlash ──
-let warnCount = 0, lastFlag = 0;
+// ── HALOLLIK: kuzatuv (tab/ilovadan chiqish) + full-screen ──
+let warnCount = 0, lastFlag = 0, fsGaveUp = false;
+// Sensorli qurilma (telefon/planshet)? Bunday qurilmalarda brauzer full-screeni
+// ko'pincha ishlamaydi (Telegram ichida / iPhone), shuning uchun majburlamaymiz.
+const IS_TOUCH = (navigator.maxTouchPoints > 0) || ('ontouchstart' in window);
 function logFlag(kind) {{
   if(submitted) return;
   const now = Date.now();
@@ -620,29 +628,33 @@ function logFlag(kind) {{
   w.style.display = 'block';
   clearTimeout(w._t); w._t = setTimeout(function(){{ w.style.display='none'; }}, 4000);
 }}
-document.addEventListener('visibilitychange', function() {{ if(document.hidden) logFlag('hidden'); }});
-window.addEventListener('blur', function() {{ logFlag('blur'); }});
-
 function isFs() {{ return !!(document.fullscreenElement || document.webkitFullscreenElement); }}
-function fsSupported() {{ const el=document.documentElement; return !!(el.requestFullscreen || el.webkitRequestFullscreen); }}
+function fsApi() {{ const el=document.documentElement; return el.requestFullscreen || el.webkitRequestFullscreen; }}
 function enterFs() {{
-  const el = document.documentElement;
-  const req = el.requestFullscreen || el.webkitRequestFullscreen;
-  if(req) {{ try {{ req.call(el); }} catch(e) {{}} }}
-  setTimeout(checkFs, 400);
+  const el = document.documentElement, req = fsApi();
+  if(!req) {{ fsGaveUp = true; checkFs(); return; }}
+  try {{ const p = req.call(el); if(p && p.catch) p.catch(function(){{}}); }} catch(e) {{}}
+  // Agar qisqa vaqtda full-screenga o'tmasa — bu qurilma qo'llab-quvvatlamaydi.
+  // O'quvchini qamab qo'ymaymiz: qoplamani olib tashlaymiz, test davom etadi.
+  setTimeout(function() {{ if(!isFs()) fsGaveUp = true; checkFs(); }}, 700);
 }}
 function checkFs() {{
   const gate = document.getElementById('fs-gate');
-  if(PROCTOR && !submitted && fsSupported() && !isFs()) gate.style.display = 'flex';
-  else gate.style.display = 'none';
+  const need = PROCTOR && !submitted && !IS_TOUCH && !fsGaveUp && !!fsApi() && !isFs();
+  gate.style.display = need ? 'flex' : 'none';
 }}
 if(PROCTOR) {{
-  function onFsChange() {{ if(!isFs() && !submitted) logFlag('fs_exit'); checkFs(); }}
-  document.addEventListener('fullscreenchange', onFsChange);
-  document.addEventListener('webkitfullscreenchange', onFsChange);
-  // brauzer full-screenni faqat foydalanuvchi harakatidan keyin ruxsat beradi
-  document.addEventListener('click', function once() {{ if(!isFs()) enterFs(); }}, {{once:true}});
-  setTimeout(checkFs, 800);
+  // tab/ilovadan chiqishni kuzatish — BARCHA qurilmalarda ishlaydi
+  document.addEventListener('visibilitychange', function() {{ if(document.hidden) logFlag('hidden'); }});
+  window.addEventListener('blur', function() {{ logFlag('blur'); }});
+  // full-screen — faqat qo'llab-quvvatlaydigan (asosan kompyuter) qurilmalarda
+  if(!IS_TOUCH) {{
+    function onFsChange() {{ if(!isFs() && !submitted && !fsGaveUp) logFlag('fs_exit'); checkFs(); }}
+    document.addEventListener('fullscreenchange', onFsChange);
+    document.addEventListener('webkitfullscreenchange', onFsChange);
+    document.addEventListener('click', function once() {{ if(!isFs() && !fsGaveUp) enterFs(); }}, {{once:true}});
+    setTimeout(checkFs, 800);
+  }}
 }}
 
 // ── BUILD ──
