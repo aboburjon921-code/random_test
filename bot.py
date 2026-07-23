@@ -27,7 +27,6 @@ BTN_CLEAR = "🗑 Bazani tozalash"; BTN_HELP = "ℹ️ Yordam"; BTN_LIVE = "🎮
 BTN_PRINT = "🖨 Chop etiladigan test"
 BTN_SCAN = "📷 Skaner"
 PRINT_VARIANTS = [1, 2, 3, 4]
-MAX_VARIANTS = 100
 
 
 def is_admin(uid): return (not ADMIN_IDS) or (uid in ADMIN_IDS)
@@ -251,7 +250,9 @@ async def finalize_test(update, ctx, edit):
     bot_username = (await ctx.bot.get_me()).username
     student_link = f"https://t.me/{bot_username}?start={code}"
     txt = (f"✅ <b>Test tayyor!</b>\n\n🔑 Kod: <code>{code}</code>\n📝 Savollar: {n} ta\n"
-           f"⏱ Vaqt: {tlimit} daqiqa\n🔀 Rejim: {'har xil' if shuffle else 'bir xil'}\n\n"
+           f"⏱ Vaqt: {tlimit} daqiqa\n🔀 Rejim: {'har xil' if shuffle else 'bir xil'}\n"
+           f"🛡 Himoya: yoniq — full-screen, tab-kuzatuv, savolga qaytmaslik "
+           f"(📊 Natijalar menyusidan o'zgartirish mumkin)\n\n"
            f"👨‍🎓 O'quvchilar havolasi:\n{student_link}\n\nyoki <code>{code}</code> kodini yuborsin.")
     rows = []
     if BASE_URL:
@@ -282,8 +283,11 @@ def _results_markup(uid):
         else:
             rows.append([InlineKeyboardButton(head, callback_data="noop")])
         toggle = ("🔓 Ochish", f"topen:{code}") if closed else ("🔒 Yopish", f"tclose:{code}")
+        proc = t.get("proctor", 1)
         rows.append([InlineKeyboardButton(toggle[0], callback_data=toggle[1]),
-                     InlineKeyboardButton("🗑 O'chirish", callback_data=f"tdel:{code}")])
+                     InlineKeyboardButton("🛡 Himoya ✅" if proc else "🛡 Himoya ❌",
+                                          callback_data=f"tproc:{code}"),
+                     InlineKeyboardButton("🗑", callback_data=f"tdel:{code}")])
     return InlineKeyboardMarkup(rows) if rows else None
 
 async def show_results_list(update, ctx):
@@ -299,6 +303,22 @@ async def on_test_toggle(update, ctx):
     uid = q.from_user.id
     db.set_closed(code, uid, action == "tclose")
     await q.answer("🔒 Test yopildi" if action == "tclose" else "🔓 Test ochildi")
+    try:
+        await q.edit_message_reply_markup(reply_markup=_results_markup(uid))
+    except Exception:
+        pass
+
+async def on_test_proctor(update, ctx):
+    q = update.callback_query
+    code = q.data.split(":")[1]
+    uid = q.from_user.id
+    test = db.get_test(code)
+    if not test or test.get("owner_id") != uid:
+        return await q.answer("Ruxsat yo'q.", show_alert=True)
+    new = 0 if test.get("proctor", 1) else 1
+    db.set_proctor(code, uid, new)
+    await q.answer("🛡 Himoya yoqildi (full-screen + kuzatuv + qaytmaslik)" if new
+                   else "Himoya o'chirildi", show_alert=False)
     try:
         await q.edit_message_reply_markup(reply_markup=_results_markup(uid))
     except Exception:
@@ -367,11 +387,6 @@ async def on_text(update, ctx):
         if text == BTN_PRINT: return await start_print(update, ctx)
         if text == BTN_SCAN: return await start_scan(update, ctx)
         if text == BTN_HELP: return await update.message.reply_html(HELP, reply_markup=menu())
-        if ctx.user_data.get("await_pvar"):
-            ctx.user_data["await_pvar"] = False
-            if not text.isdigit(): return await update.message.reply_text("Faqat son yuboring.")
-            n = max(1, min(int(text), MAX_VARIANTS))
-            return await _gen_and_send_print(update, ctx, n)
         if ctx.user_data.get("await_pcount"):
             ctx.user_data["await_pcount"] = False
             if not text.isdigit(): return await update.message.reply_text("Faqat son yuboring.")
@@ -574,10 +589,8 @@ def _print_count_kb(total):
     return InlineKeyboardMarkup(rows)
 
 def _print_var_kb():
-    row = [InlineKeyboardButton(("1 variant" if v == 1 else f"{v} variant"),
-                                callback_data=f"pvar:{v}") for v in PRINT_VARIANTS]
-    return InlineKeyboardMarkup([row,
-        [InlineKeyboardButton(f"✏️ Boshqa (har o'quvchiga, {MAX_VARIANTS} gacha)", callback_data="pvar:custom")]])
+    return InlineKeyboardMarkup([[InlineKeyboardButton(
+        ("1 variant" if v == 1 else f"{v} variant"), callback_data=f"pvar:{v}") for v in PRINT_VARIANTS]])
 
 async def start_print(update, ctx):
     uid = update.effective_user.id
@@ -644,13 +657,8 @@ async def on_print_count(update, ctx):
 
 async def on_print_var(update, ctx):
     q = update.callback_query; await q.answer()
-    val = q.data.split(":")[1]
-    if val == "custom":
-        ctx.user_data["await_pvar"] = True
-        return await q.edit_message_text(
-            f"✏️ Nechta variant? Sonini yozing (1–{MAX_VARIANTS}).\n"
-            "Ko'p bo'lsa tayyorlash biroz uzoqroq davom etadi.")
-    await _gen_and_send_print(update, ctx, int(val))
+    n = int(q.data.split(":")[1])
+    await _gen_and_send_print(update, ctx, n)
 
 def _build_print(uid, title, count, spec, n_variants):
     ids = db.pick_ids(uid, count=count, spec=spec)
@@ -658,15 +666,15 @@ def _build_print(uid, title, count, spec, n_variants):
     if not questions:
         return None
     n_q = len(questions)
-    docxs, keys = [], []
+    docxs, pdfs, keys = [], [], []
     for v in range(n_variants):
         order = list(questions); random.shuffle(order)
         vtitle = title if n_variants == 1 else f"{title} · Variant {v+1}"
         docx, key = docgen.build_test_docx(order, title=vtitle, shuffle_opts=True,
                                            get_media=db.get_media, seed=random.random())
         docxs.append(docx); keys.append(key)
+        pdfs.append(docgen.docx_to_pdf(docx))
     code = db.save_print_test(uid, title, keys)
-    pdfs = docgen.docx_to_pdf_batch(docxs)          # hammasi bitta chaqiruvda
     sheets = [omr.build_answer_sheet_pdf(code, vi + 1, n_q, title=title, total=n_q)
               for vi in range(n_variants)]
 
@@ -740,6 +748,7 @@ def build_app():
     app.add_handler(CallbackQueryHandler(on_time, pattern=r"^tm:"))
     app.add_handler(CallbackQueryHandler(on_clear, pattern=r"^clr:"))
     app.add_handler(CallbackQueryHandler(on_test_toggle, pattern=r"^(tclose|topen):"))
+    app.add_handler(CallbackQueryHandler(on_test_proctor, pattern=r"^tproc:"))
     app.add_handler(CallbackQueryHandler(on_test_delete, pattern=r"^tdel:"))
     app.add_handler(CallbackQueryHandler(on_test_delete_confirm, pattern=r"^(tdelyes:|tdelno$)"))
     app.add_handler(CallbackQueryHandler(on_begin, pattern=r"^begin:"))
