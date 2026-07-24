@@ -1,0 +1,5 @@
+# Railway (Nixpacks) — tizim kutubxonalari.
+# pyzbar QR o'qish uchun libzbar0 kerak. Bu faylsiz ham bot ishlaydi
+# (kod OpenCV'ga qaytadi), lekin libzbar0 bilan QR ancha ishonchli o'qiladi.
+[phases.setup]
+aptPkgs = ["libzbar0"]
